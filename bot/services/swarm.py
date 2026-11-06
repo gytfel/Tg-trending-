@@ -28,8 +28,6 @@ from bot.sources.collector import Snapshot
 
 log = logging.getLogger(__name__)
 
-Progress = Callable[[str], Awaitable[None]]
-
 SIGNAL_ICON = {"positive": "🟢", "neutral": "🟡", "negative": "🔴"}
 DETAILS_LIMIT = 3500  # сообщение Telegram — до 4096 символов
 
@@ -312,32 +310,28 @@ class Swarm:
         question: str,
         snaps: list[Snapshot],
         g: Snapshot | None,
-        progress: Progress | None = None,
+        on_start: Callable[[list[Role]], Awaitable[None]] | None = None,
+        on_done: Callable[[AgentResult], Awaitable[None]] | None = None,
     ) -> list[AgentResult]:
+        """Запускает агентов параллельно. on_start/on_done — для «мыслей» в чате."""
         jobs = [(r, p) for r in ROLES if self.model_for(r) and (p := self.payload(r, snaps, g))]
         if not jobs:
             return []
-        status = {r.key: "…" for r, _ in jobs}
 
-        def render_progress() -> str:
-            line = "  ".join(f"{r.icon} {status[r.key]}" for r, _ in jobs)
-            return f"🐝 Рой анализирует данные:\n{line}"
-
-        async def report_progress() -> None:
-            if progress is not None:
+        async def notify(cb, arg) -> None:
+            if cb is not None:
                 try:
-                    await progress(render_progress())
-                except Exception:  # noqa: BLE001
-                    pass
+                    await cb(arg)
+                except Exception:  # noqa: BLE001 — прогресс не важнее результата
+                    log.debug("swarm progress callback failed", exc_info=True)
 
-        await report_progress()
+        await notify(on_start, [r for r, _ in jobs])
         tasks = [asyncio.create_task(self._run_agent(r, question, p)) for r, p in jobs]
         results: list[AgentResult] = []
         for fut in asyncio.as_completed(tasks):
             res = await fut
-            status[res.role.key] = SIGNAL_ICON.get(res.signal, "✓") if res.ok else "✗"
             results.append(res)
-            await report_progress()
+            await notify(on_done, res)
         order = {r.key: i for i, r in enumerate(ROLES)}
         results.sort(key=lambda x: order[x.role.key])
         return results

@@ -132,16 +132,21 @@ def test_parse_agent_output_rejects(text):
 async def test_run_all_agents_in_parallel_with_progress():
     hub = FakeHub(replies={"derivatives": answer("negative", "Лонги перегреты: фандинг 0.01%")})
     swarm = Swarm(hub, default_model="claude-haiku-5-5", bot_name="Trending")
-    progress: list[str] = []
+    started: list[list[str]] = []
+    finished: list[str] = []
 
-    async def on_progress(t):
-        progress.append(t)
+    async def on_start(roles):
+        started.append([r.key for r in roles])
 
-    results = await swarm.run("разбери BTC", [btc_snap()], btc_snap(), progress=on_progress)
+    async def on_done(res):
+        finished.append(f"{res.role.key}:{res.signal}")
+
+    results = await swarm.run("разбери BTC", [btc_snap()], btc_snap(), on_start=on_start, on_done=on_done)
     assert [r.role.key for r in results] == ["market", "derivatives", "onchain", "news"]
     assert all(r.ok for r in results)
     assert results[1].signal == "negative" and results[1].model.short == "haiku-5-5"
-    assert progress[0].startswith("🐝 Рой анализирует") and "🔴" in progress[-1]
+    assert started == [["market", "derivatives", "onchain", "news"]]
+    assert sorted(finished) == ["derivatives:negative", "market:positive", "news:positive", "onchain:positive"]
     ref, role, kw = hub.calls[0]
     assert kw["schema"]["required"] == ["signal", "confidence", "headline", "points", "watch"]
     assert kw["effort"] == "low" and "разбери BTC" in kw["prompt"]

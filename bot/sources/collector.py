@@ -6,6 +6,7 @@ import asyncio
 import logging
 import statistics
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -196,12 +197,17 @@ async def collect(
     *,
     per_source_timeout: float = 8.0,
     deadline: float = 14.0,
+    on_done: Callable[[], None] | None = None,
 ) -> Snapshot:
+    """on_done вызывается после каждого ответившего (или упавшего) источника — для живого счётчика."""
     snap = Snapshot(asset=asset, asked=len(sources))
     if not sources:
         return snap
     t0 = time.monotonic()
     tasks = {asyncio.create_task(_run_one(s, http, asset, per_source_timeout)): s for s in sources}
+    if on_done is not None:
+        for task in tasks:
+            task.add_done_callback(lambda t: t.cancelled() or on_done())
     done, pending = await asyncio.wait(tasks.keys(), timeout=deadline)
     for task in pending:
         task.cancel()

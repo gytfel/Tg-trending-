@@ -9,6 +9,7 @@ from bot.db import Skill
 from bot.query_parser import parse_query
 from bot.services.analyzer import Analyzer
 from bot.services.llm import LLM
+from bot.services.progress import Progress
 from bot.sources.registry import Registry
 from tests.conftest import FakeHttp
 
@@ -82,13 +83,9 @@ def llm_off():
 
 async def test_symbol_analysis_without_llm(registry, llm_off):
     reg = small_registry(registry, ["binance", "bybit", "coingecko", "bybit_linear", "fear_greed", "coindesk"])
-    stages: list[str] = []
-
-    async def stage(t):
-        stages.append(t)
-
+    progress = Progress()
     an = Analyzer(btc_http(), reg, llm_off, deadline=3)
-    res = await an.analyze(parse_query("разбери BTC"), [], stage)
+    res = await an.analyze(parse_query("разбери BTC"), [], progress)
     assert res.kind == "asset" and res.symbols == ["BTC"]
     assert "<b>Bitcoin</b> · BTC · #1" in res.text
     assert "$100" in res.text and "Бирж: 2" in res.text
@@ -97,7 +94,12 @@ async def test_symbol_analysis_without_llm(registry, llm_off):
     assert "F&amp;G 80" in res.text
     assert "🧭 <b>Коротко</b>" in res.text and "сильный рост" in res.text and "жадности" in res.text
     assert res.ok == res.asked == 6
-    assert any("Опрашиваю" in s for s in stages)
+    assert progress.lines() == [
+        "🧩 Понял задачу: разбор BTC",
+        "🔎 Нашёл: Bitcoin (BTC) #1",
+        "📡 Собрал данные: 6 из 6 · биржи 2, агрегаторы 1, деривативы 1, новости 1",
+        "🧭 Делаю вывод по правилам",
+    ]
 
 
 async def test_unknown_symbol_is_nothing(registry, llm_off):

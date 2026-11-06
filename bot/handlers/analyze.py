@@ -16,6 +16,7 @@ from bot import keyboards, texts
 from bot.callbacks import Ask, Nav, ReportCb
 from bot.formatting import split_message
 from bot.handlers.common import safe_edit, show
+from bot.handlers.thinking import ThinkingMessage
 from bot.query_parser import parse_query
 from bot.services import Services, report
 
@@ -92,20 +93,23 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
     used_skills = [s for s in skills if s.name in parsed.skills]
 
     svc.busy.add(user_id)
-    progress = await chat_msg.answer("⏳ Разбираю запрос…")
-
-    async def stage(t: str) -> None:
-        await progress.edit_text(t)
-
+    thinking: ThinkingMessage | None = None
     try:
-        async with ChatActionSender.typing(bot=chat_msg.bot, chat_id=chat_msg.chat.id):
-            result = await svc.analyzer.analyze(parsed, used_skills, stage)
+        # «✱ Думаю…» — живое сообщение с ходом обработки; потом оно превратится в отчёт
+        thinking = await ThinkingMessage.start(chat_msg)
+        try:
+            async with ChatActionSender.typing(bot=chat_msg.bot, chat_id=chat_msg.chat.id):
+                result = await svc.analyzer.analyze(parsed, used_skills, thinking)
+        finally:
+            await thinking.close()
     except Exception:  # noqa: BLE001
         log.exception("analysis failed for %r", text)
-        await safe_edit(progress, texts.ERROR, keyboards.back())
+        if thinking is not None and thinking.message is not None:
+            await safe_edit(thinking.message, texts.ERROR, keyboards.back())
         return
     finally:
         svc.busy.discard(user_id)
+    progress = thinking.message
 
     if not result.found:
         if parsed.is_empty:

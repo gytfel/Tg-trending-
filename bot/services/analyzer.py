@@ -5,16 +5,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections import Counter
 from dataclasses import dataclass, field
 
 from bot.db import Skill
-from bot.formatting import esc
+from bot.formatting import esc, short_addr
 from bot.query_parser import ParsedQuery
 from bot.services import report, swarm
 from bot.services.llm import LLM, to_html
+from bot.services.progress import Progress
 from bot.services.swarm import Swarm
-from bot.sources.base import Asset
+from bot.sources.base import Asset, Category
 from bot.sources.collector import Snapshot, collect
 from bot.sources.http import Http
 from bot.sources.registry import Registry
@@ -22,7 +23,52 @@ from bot.sources.resolver import resolve_contract, resolve_symbol
 
 log = logging.getLogger(__name__)
 
-Stage = Callable[[str], Awaitable[None]]
+# короткие названия категорий для строки «Собрал данные: …»
+CAT_SHORT = {
+    Category.CEX: "биржи",
+    Category.DERIVATIVES: "деривативы",
+    Category.AGGREGATOR: "агрегаторы",
+    Category.DEX: "DEX",
+    Category.DEFI: "DeFi",
+    Category.ONCHAIN: "ончейн",
+    Category.SECURITY: "проверки",
+    Category.SENTIMENT: "настроения",
+    Category.NEWS: "новости",
+    Category.SOCIAL: "соцсети",
+    Category.MACRO: "макро",
+}
+
+
+def describe_task(q: ParsedQuery, skills: list[Skill]) -> str:
+    """«Понял задачу: …» — первая строка размышлений."""
+    targets = q.targets
+    if not targets:
+        what = "обзор рынка" + (" и ответ на вопрос" if not q.market else "")
+    elif len(targets) > 1:
+        what = "сравнение " + " и ".join(v if k == "symbol" else short_addr(v) for k, v in targets)
+    elif targets[0][0] == "contract":
+        what = f"проверка контракта {short_addr(targets[0][1])}"
+    else:
+        what = f"разбор {targets[0][1]}"
+    if skills:
+        what += " · навык «" + "», «".join(s.name for s in skills) + "»"
+    return f"Понял задачу: {what}"
+
+
+def describe_asset(a: Asset) -> str:
+    if a.contract:
+        name = a.name or a.symbol or short_addr(a.contract)
+        return f"{name} · {a.chain}" if a.chain else f"{name} · сеть не определена"
+    label = f"{a.name} ({a.symbol})" if a.name and a.symbol else (a.symbol or "?")
+    return f"{label} #{a.rank}" if a.rank else label
+
+
+def describe_collected(snaps: list[Snapshot]) -> str:
+    ok = sum(s.ok_count() for s in snaps)
+    asked = sum(s.asked for s in snaps)
+    by_cat = Counter(r.category for s in snaps for r in s.results)
+    top = ", ".join(f"{CAT_SHORT[c]} {n}" for c, n in by_cat.most_common(4))
+    return f"Собрал данные: {ok} из {asked}" + (f" · {top}" if top else "")
 
 
 @dataclass(slots=True)
@@ -61,37 +107,50 @@ class Analyzer:
         self.source_timeout = source_timeout
         self.deadline = deadline
 
-    async def _collect(self, sources, asset: Asset | None) -> Snapshot:
-        return await collect(self.http, sources, asset, per_source_timeout=self.source_timeout, deadline=self.deadline)
+    async def _collect(self, sources, asset: Asset | None, on_done=None) -> Snapshot:
+        return await collect(
+            self.http,
+            sources,
+            asset,
+            per_source_timeout=self.source_timeout,
+            deadline=self.deadline,
+            on_done=on_done,
+        )
 
     async def _resolve(self, kind: str, value: str) -> Asset:
         if kind == "contract":
             return await resolve_contract(self.http, value)
         return await resolve_symbol(self.http, value)
 
-    async def analyze(self, q: ParsedQuery, skills: list[Skill], stage: Stage | None = None) -> AnalysisResult:
-        t0 = time.monotonic()
+    async def _collect_all(self, jobs: list[tuple[list, Asset | None]], progress: Progress) -> list[Snapshot]:
+        """Опрашивает источники и ведёт живой счётчик «Работаю с данными: N из M»."""
+        total = sum(len(srcs) for srcs, _ in jobs)
+        done = [0]
 
-        async def say(text: str) -> None:
-            if stage is not None:
-                try:
-                    await stage(text)
-                except Exception:  # noqa: BLE001 — прогресс не важнее результата
-                    pass
+        def tick() -> None:
+            done[0] += 1
+
+        await progress.step("🔧", lambda: f"Работаю с данными: {done[0]} из {total} источников")
+        snaps = list(await asyncio.gather(*(self._collect(srcs, a, tick) for srcs, a in jobs)))
+        await progress.update(describe_collected(snaps), icon="📡")
+        return snaps
+
+    async def analyze(self, q: ParsedQuery, skills: list[Skill], progress: Progress | None = None) -> AnalysisResult:
+        t0 = time.monotonic()
+        progress = progress if progress is not None else Progress()
 
         targets = q.targets
         ai_on = self.llm.enabled or (self.swarm is not None and self.swarm.enabled)
         overview = not targets and (q.market or (ai_on and q.words >= 3))
         if not targets and not overview:
             return AnalysisResult(kind="nothing", text="")
+        await progress.step("🧩", describe_task(q, skills))
 
         if overview:
-            sources = self.registry.for_overview()
-            await say(f"⏳ Смотрю на рынок: опрашиваю {len(sources)} источников…")
-            g = await self._collect(sources, None)
+            (g,) = await self._collect_all([(self.registry.for_overview(), None)], progress)
             body = report.overview_section(g)
             news = report.news_block(g, limit=5)
-            verdict, used, agents = await self._verdict(q, [], g, skills, say)
+            verdict, used, agents = await self._verdict(q, [], g, skills, progress)
             text = "\n\n".join(
                 p for p in (body, news, verdict, report.footer(g.ok_count(), g.asked, time.monotonic() - t0)) if p
             )
@@ -106,21 +165,17 @@ class Analyzer:
                 agents=agents,
             )
 
-        labels = ", ".join(v if k == "symbol" else v[:6] + "…" for k, v in targets)
-        await say(f"⏳ Ищу {esc(labels)}…")
+        labels = ", ".join(v if k == "symbol" else short_addr(v) for k, v in targets)
+        await progress.step("🔎", f"Ищу {labels} в справочниках монет")
         assets = list(await asyncio.gather(*(self._resolve(k, v) for k, v in targets)))
+        await progress.update("Нашёл: " + "; ".join(describe_asset(a) for a in assets))
 
-        per_asset = [self.registry.for_asset(a) for a in assets]
-        global_sources = self.registry.for_global()
-        total = sum(len(s) for s in per_asset) + len(global_sources)
-        await say(f"⏳ Опрашиваю {total} источников: биржи, деривативы, DEX, ончейн, новости…")
-
-        g_task = asyncio.create_task(self._collect(global_sources, None))
-        snaps = list(await asyncio.gather(*(self._collect(s, a) for s, a in zip(per_asset, assets, strict=True))))
-        g = await g_task
+        jobs = [(self.registry.for_asset(a), a) for a in assets] + [(self.registry.for_global(), None)]
+        *snaps, g = await self._collect_all(jobs, progress)
 
         found = [s for s in snaps if s.price() is not None or s.dex_pairs()]
         if not found:
+            await progress.step("🤷", "Котировок и пулов по запросу не нашлось")
             return AnalysisResult(kind="nothing", text="", snapshots=snaps, background=g)
 
         sections = []
@@ -137,7 +192,7 @@ class Analyzer:
         if ml:
             sections.append(ml)
 
-        verdict, used, agents = await self._verdict(q, found, g, skills, say)
+        verdict, used, agents = await self._verdict(q, found, g, skills, progress)
         if verdict:
             sections.append(verdict)
 
@@ -167,15 +222,24 @@ class Analyzer:
         snaps: list[Snapshot],
         g: Snapshot | None,
         skills: list[Skill],
-        say: Stage,
+        progress: Progress,
     ) -> tuple[str, bool, list[swarm.AgentResult]]:
         """Рой агентов (если включён) → итог главного аналитика → или вывод по правилам."""
         blocks: list[str] = []
         agents: list[swarm.AgentResult] = []
         if self.swarm is not None and self.swarm.enabled:
-            await say("🐝 Данные собраны, рой агентов приступает…")
+
+            async def started(roles: list[swarm.Role]) -> None:
+                await progress.step("🐝", "Подключаю агентов: " + ", ".join(r.title.lower() for r in roles))
+
+            async def finished(res: swarm.AgentResult) -> None:
+                if res.ok:
+                    await progress.step(res.role.icon, f"{res.role.title}: {res.headline}")
+                else:
+                    await progress.step(res.role.icon, f"{res.role.title}: не ответил ({res.error})")
+
             try:
-                agents = await self.swarm.run(q.raw, snaps, g, progress=say)
+                agents = await self.swarm.run(q.raw, snaps, g, on_start=started, on_done=finished)
             except Exception:  # noqa: BLE001
                 log.exception("swarm failed")
                 agents = []
@@ -184,7 +248,10 @@ class Analyzer:
         answered = [a.as_dict() for a in agents if a.ok]
 
         if self.llm.enabled:
-            await say("🤖 Главный аналитик сводит выводы…" if answered else "🤖 Данные собраны, формирую вывод…")
+            if answered:
+                await progress.step("🤖", f"Свожу выводы {len(answered)} агентов в итог")
+            else:
+                await progress.step("🤖", "Анализирую данные и формулирую вывод")
             try:
                 text = await self.llm.verdict(q.raw, report.llm_context(snaps, g), skills, agents=answered or None)
             except Exception:  # noqa: BLE001
@@ -197,6 +264,7 @@ class Analyzer:
                 blocks.append(f"{title}\n{to_html(text)}")
                 return "\n\n".join(blocks), True, agents
         if snaps:
+            await progress.step("🧭", "Делаю вывод по правилам")
             bullets = "\n".join(f"• {esc(b)}" for b in report.rule_verdict(snaps, g))
             note = "\n<i>Навыки применяются в ИИ-выводе — подключи ключ ИИ.</i>" if skills else ""
             blocks.append(f"🧭 <b>Коротко</b>\n{bullets}{note}")

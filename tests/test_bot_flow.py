@@ -191,7 +191,9 @@ async def test_analyze_screen_and_trending_button(env):
 async def test_free_text_spends_quota_and_unknown_does_not(env):
     session, feed, svc = env
     await feed(msg("разбери BTC"))
-    assert "Bitcoin" in session.last().text
+    sent = [r for r in session.requests if isinstance(r, SendMessage)]
+    assert sent[-1].text.startswith("✱ <b>Думаю")  # сначала «думает»…
+    assert isinstance(session.last(), EditMessageText) and "Bitcoin" in session.last().text  # …потом то же сообщение становится отчётом
     assert (await svc.quota.status(UID)).used == 1
     await feed(msg("привет"))
     assert "Не нашёл монету" in session.last().text
