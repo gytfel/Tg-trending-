@@ -355,7 +355,7 @@ def rule_verdict(snaps: list[Snapshot], g: Snapshot | None) -> list[str]:
 # --- контекст для ИИ ------------------------------------------------------------------------
 
 
-def _snap_context(s: Snapshot) -> dict[str, Any]:
+def snapshot_context(s: Snapshot) -> dict[str, Any]:
     a = s.asset
     m = s.best_market()
     ctx: dict[str, Any] = {}
@@ -434,9 +434,9 @@ def _snap_context(s: Snapshot) -> dict[str, Any]:
 
 
 def llm_context(snaps: list[Snapshot], g: Snapshot | None) -> dict[str, Any]:
-    out: dict[str, Any] = {"assets": [_snap_context(s) for s in snaps]}
+    out: dict[str, Any] = {"assets": [snapshot_context(s) for s in snaps]}
     if g is not None and g.results:
-        out["market_background"] = _snap_context(g)
+        out["market_background"] = snapshot_context(g)
     return out
 
 

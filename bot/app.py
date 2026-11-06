@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -13,6 +14,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 from dotenv import load_dotenv
 
+from bot.ai import AIHub
 from bot.config import Settings
 from bot.db import Database
 from bot.handlers import build_router
@@ -22,6 +24,7 @@ from bot.services.analyzer import Analyzer
 from bot.services.llm import LLM
 from bot.services.prices import PriceService
 from bot.services.quota import Quota
+from bot.services.swarm import Swarm
 from bot.services.trending import Trending
 from bot.services.watches import Watcher
 from bot.sources.http import Http
@@ -44,14 +47,26 @@ async def build_services(settings: Settings) -> Services:
     db = Database(settings.database_path)
     await db.connect()
     http = Http(timeout=settings.source_timeout, limit=settings.http_concurrency)
-    llm = LLM(
-        api_key=settings.anthropic_api_key,
-        model=settings.llm_model,
-        effort=settings.llm_effort,
-        timeout=settings.llm_timeout,
+    hub = build_hub(settings)
+    llm = LLM(hub, settings.llm_model, settings.llm_effort, settings.bot_name)
+    swarm = Swarm(
+        hub,
+        default_model=settings.swarm_agent_model,
+        role_models=settings.swarm_role_models,
+        fallback_model=settings.swarm_fallback_model,
+        effort=settings.swarm_agent_effort,
+        timeout=settings.swarm_agent_timeout,
         bot_name=settings.bot_name,
+        enabled=settings.ai_mode.strip().lower() == "swarm",
     )
-    analyzer = Analyzer(http, registry, llm, source_timeout=settings.source_timeout, deadline=settings.collect_deadline)
+    analyzer = Analyzer(
+        http,
+        registry,
+        llm,
+        swarm=swarm,
+        source_timeout=settings.source_timeout,
+        deadline=settings.collect_deadline,
+    )
     return Services(
         settings=settings,
         db=db,
@@ -62,7 +77,17 @@ async def build_services(settings: Settings) -> Services:
         prices=PriceService(http, registry),
         quota=Quota(db, settings.daily_limit, settings.admins),
         trending=Trending(db, settings.trending_hours),
+        swarm=swarm,
+        hub=hub,
     )
+
+
+def build_hub(settings: Settings) -> AIHub:
+    """Ключи провайдеров — из окружения (.env подхвачен load_dotenv), ключ Claude — из настроек."""
+    env = dict(os.environ)
+    if settings.anthropic_api_key:
+        env["ANTHROPIC_API_KEY"] = settings.anthropic_api_key
+    return AIHub(env, timeout=settings.llm_timeout, app_name=settings.bot_name)
 
 
 def build_dispatcher(svc: Services) -> Dispatcher:
@@ -84,12 +109,12 @@ async def main() -> None:
     svc = await build_services(settings)
     st = svc.registry.stats()
     log.info(
-        "sources: %s active, %s need keys, %s planned (catalog %s); LLM: %s",
+        "sources: %s active, %s need keys, %s planned (catalog %s); AI: %s",
         st["active"],
         st["needs_key"],
         st["planned"],
         st["total"],
-        svc.llm.model if svc.llm.enabled else "off",
+        svc.ai_status(),
     )
 
     bot = Bot(
@@ -109,7 +134,8 @@ async def main() -> None:
         with contextlib.suppress(asyncio.CancelledError):
             await watcher
         await svc.http.close()
-        await svc.llm.close()
+        if svc.hub is not None:
+            await svc.hub.close()
         await svc.db.close()
         await bot.session.close()
 

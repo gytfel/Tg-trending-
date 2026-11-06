@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from bot.ai import AIHub
 from bot.db import Skill
 from bot.query_parser import parse_query
 from bot.services.analyzer import Analyzer
@@ -76,7 +77,7 @@ def btc_http() -> FakeHttp:
 
 @pytest.fixture
 def llm_off():
-    return LLM(api_key=None, model="claude-opus-5-5", effort="medium", timeout=5, bot_name="Test")
+    return LLM(AIHub({}), "claude-opus-5-5", "medium", "Test")
 
 
 async def test_symbol_analysis_without_llm(registry, llm_off):
@@ -166,7 +167,7 @@ class StubLLM:
     def __init__(self):
         self.seen = None
 
-    async def verdict(self, question, context, skills):
+    async def verdict(self, question, context, skills, agents=None):
         self.seen = (question, context, skills)
         return "**Импульс** сильный <script>\n• держим"
 

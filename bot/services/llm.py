@@ -1,6 +1,7 @@
-"""ИИ-вывод по собранным данным через Claude API.
+"""Главный аналитик: итоговый вывод по данным (и по выводам роя агентов, если он включён).
 
-Без ANTHROPIC_API_KEY сервис выключен, и бот пишет вывод по простым правилам.
+Модель задаётся в LLM_MODEL («claude-opus-5-5» или «провайдер:модель»).
+Без ключа к этой модели сервис выключен, и бот пишет вывод по простым правилам.
 """
 
 from __future__ import annotations
@@ -10,16 +11,11 @@ import logging
 import re
 from typing import Any
 
-import anthropic
-
+from bot.ai import AIError, AIHub, ModelRef
 from bot.db import Skill
 from bot.formatting import esc
 
 log = logging.getLogger(__name__)
-
-# Модели, которые принимают серверный fallback при отказе (`fallbacks: "default"`)
-FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5"}
-FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
 SYSTEM_PROMPT = """Ты — {bot_name}, ИИ-аналитик крипторынка в Telegram-боте.
 
@@ -36,6 +32,13 @@ SYSTEM_PROMPT = """Ты — {bot_name}, ИИ-аналитик крипторын
 - Если пользователь подключил навыки, следуй их правилам и формату ответа, но не выдумывай данные ради шаблона.
 - Не добавляй дисклеймер про финансовый совет — бот добавит его сам."""
 
+SWARM_ADDON = """
+
+Ты — главный аналитик роя. Перед тобой выводы агентов-специалистов (каждый смотрел только свою часть данных) и все исходные данные.
+- Сведи выводы в общий итог: где агенты согласны, где расходятся и чья позиция сильнее по цифрам.
+- Если агент ошибся или упустил важное в данных — поправь его, сославшись на цифру.
+- Не пересказывай агентов по очереди: их выводы пользователь уже видит выше. Дай синтез и итоговую позицию."""
+
 
 def to_html(text: str) -> str:
     """Экранирует ответ модели и переводит случайный **жирный** в <b>."""
@@ -45,71 +48,59 @@ def to_html(text: str) -> str:
     return out
 
 
+def _json(data: Any) -> str:
+    return json.dumps(data, ensure_ascii=False, default=str, separators=(",", ":"))
+
+
 class LLM:
-    def __init__(
-        self,
-        api_key: str | None,
-        model: str,
-        effort: str | None,
-        timeout: float,
-        bot_name: str,
-    ) -> None:
-        self.model = model
+    def __init__(self, hub: AIHub, model: str, effort: str | None, bot_name: str) -> None:
+        self.hub = hub
+        self.ref = ModelRef.parse(model)
         self.effort = (effort or "").strip() or None
-        self.system = SYSTEM_PROMPT.format(bot_name=bot_name)
-        self._client = anthropic.AsyncAnthropic(api_key=api_key, timeout=timeout, max_retries=1) if api_key else None
+        self.bot_name = bot_name
+
+    @property
+    def model(self) -> str:
+        return self.ref.model
 
     @property
     def enabled(self) -> bool:
-        return self._client is not None
-
-    async def close(self) -> None:
-        if self._client is not None:
-            await self._client.close()
+        return self.hub.available(self.ref)
 
     @staticmethod
-    def build_prompt(question: str, context: dict[str, Any], skills: list[Skill]) -> str:
+    def build_prompt(
+        question: str,
+        context: dict[str, Any],
+        skills: list[Skill],
+        agents: list[dict[str, Any]] | None = None,
+    ) -> str:
         parts = [f"Вопрос пользователя:\n{question.strip()}"]
         if skills:
             rendered = "\n\n".join(f'<skill name="{s.name}">\n{s.content}\n</skill>' for s in skills)
             parts.append(f"Навыки пользователя (его правила и шаблоны):\n{rendered}")
-        data = json.dumps(context, ensure_ascii=False, default=str, separators=(",", ":"))
-        parts.append(f"Данные (JSON):\n{data}")
+        if agents:
+            parts.append(f"Выводы агентов роя (JSON):\n{_json(agents)}")
+        parts.append(f"Данные (JSON):\n{_json(context)}")
         return "\n\n".join(parts)
 
-    async def verdict(self, question: str, context: dict[str, Any], skills: list[Skill]) -> str | None:
-        if self._client is None:
+    async def verdict(
+        self,
+        question: str,
+        context: dict[str, Any],
+        skills: list[Skill],
+        agents: list[dict[str, Any]] | None = None,
+    ) -> str | None:
+        if not self.enabled:
             return None
-        params: dict[str, Any] = {
-            "model": self.model,
-            "max_tokens": 16000,
-            "system": self.system,
-            "messages": [{"role": "user", "content": self.build_prompt(question, context, skills)}],
-        }
-        if self.effort:
-            params["output_config"] = {"effort": self.effort}
+        system = SYSTEM_PROMPT.format(bot_name=self.bot_name) + (SWARM_ADDON if agents else "")
         try:
-            if self.model in FALLBACK_MODELS:
-                resp = await self._client.beta.messages.create(**params, betas=[FALLBACK_BETA], fallbacks="default")
-            else:
-                resp = await self._client.messages.create(**params)
-        except anthropic.AuthenticationError:
-            log.error("LLM: неверный ANTHROPIC_API_KEY")
+            return await self.hub.complete(
+                self.ref,
+                system,
+                self.build_prompt(question, context, skills, agents),
+                max_tokens=16000,
+                effort=self.effort,
+            )
+        except AIError as e:
+            log.warning("главный аналитик (%s) не ответил: %s", self.ref, e)
             return None
-        except anthropic.BadRequestError as e:
-            log.error("LLM: некорректный запрос: %s", e.message)
-            return None
-        except anthropic.RateLimitError:
-            log.warning("LLM: упёрлись в rate limit")
-            return None
-        except anthropic.APIStatusError as e:
-            log.warning("LLM: ошибка API %s: %s", e.status_code, e.message)
-            return None
-        except anthropic.APIConnectionError as e:
-            log.warning("LLM: нет соединения: %r", e)
-            return None
-        if resp.stop_reason == "refusal":
-            log.info("LLM: модель отказалась отвечать")
-            return None
-        text = "".join(b.text for b in resp.content if b.type == "text").strip()
-        return text or None

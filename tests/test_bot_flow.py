@@ -13,6 +13,7 @@ from aiogram.enums import ParseMode
 from aiogram.methods import AnswerCallbackQuery, EditMessageText, SendMessage
 from aiogram.types import CallbackQuery, Chat, Message, MessageEntity, Update, User
 
+from bot.ai import AIHub
 from bot.app import build_dispatcher
 from bot.config import Settings
 from bot.db import Database
@@ -135,7 +136,7 @@ async def env(registry, dispatcher):
     for sid in ("binance", "coingecko", "fear_greed"):
         reg.add(registry.get(sid))
     http = api()
-    llm = LLM(api_key=None, model="claude-opus-5-5", effort="medium", timeout=5, bot_name="Trending")
+    llm = LLM(AIHub({}), "claude-opus-5-5", "medium", "Trending")
     svc = Services(
         settings=settings,
         db=db,

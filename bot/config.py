@@ -24,11 +24,24 @@ class Settings(BaseSettings):
     max_watches: int = 20
     trending_hours: int = 12
 
-    # ИИ-вывод (Claude). Без ключа бот пишет вывод по правилам.
+    # ИИ. Модель: «claude-opus-5-5» или «провайдер:модель» (openai:…, deepseek:…, openrouter:…, ollama:…).
+    # Ключи других провайдеров (OPENAI_API_KEY, DEEPSEEK_API_KEY…) читаются из окружения.
     anthropic_api_key: str | None = None
-    llm_model: str = "claude-opus-5-5"
+    llm_model: str = "claude-opus-5-5"  # главный аналитик (итог)
     llm_effort: str = "medium"  # low | medium | high | xhigh | max; пусто — не передавать
     llm_timeout: float = 90.0
+
+    # Рой агентов: специалисты по деривативам, рынку, ончейну, новостям и рискам
+    ai_mode: str = "swarm"  # swarm — рой + главный аналитик; single — только главный
+    swarm_agent_model: str = "claude-haiku-5-5"  # модель агентов по умолчанию
+    swarm_agent_effort: str = "low"
+    swarm_agent_timeout: float = 45.0
+    swarm_fallback_model: str = ""  # запасная модель, если агент не ответил
+    swarm_model_market: str = ""  # свои модели для отдельных ролей (необязательно)
+    swarm_model_derivatives: str = ""
+    swarm_model_onchain: str = ""
+    swarm_model_news: str = ""
+    swarm_model_risk: str = ""
 
     # Источники
     source_timeout: float = 8.0  # на один источник
@@ -44,6 +57,16 @@ class Settings(BaseSettings):
     @cached_property
     def admins(self) -> set[int]:
         return {int(x) for x in self.admin_ids.replace(" ", "").split(",") if x.strip().isdigit()}
+
+    @cached_property
+    def swarm_role_models(self) -> dict[str, str]:
+        return {
+            "market": self.swarm_model_market,
+            "derivatives": self.swarm_model_derivatives,
+            "onchain": self.swarm_model_onchain,
+            "news": self.swarm_model_news,
+            "risk": self.swarm_model_risk,
+        }
 
     @cached_property
     def disabled(self) -> list[str]:

@@ -167,8 +167,8 @@ def profile(user: User | None, user_id: int, quota: QuotaStatus, total: int, ski
     )
 
 
-def help_text(limit: int, stats: dict[str, int], llm: bool) -> str:
-    ai = "ИИ-вывод: включён (Claude)." if llm else "ИИ-вывод: выключен — бот даёт выводы по правилам."
+def help_text(limit: int, stats: dict[str, int], ai: str) -> str:
+    ai_line = f"ИИ: {esc(ai)}." if ai != "выключен" else "ИИ: выключен — бот даёт выводы по правилам."
     return (
         "❓ <b>Помощь</b>\n\n"
         "<b>Как спрашивать</b>\n"
@@ -181,7 +181,7 @@ def help_text(limit: int, stats: dict[str, int], llm: bool) -> str:
         f"<b>Запас</b> — {limit} разборов в сутки, обновляется в 00:00 UTC.\n"
         f"<b>Данные</b> — {stats['active']} подключённых источников из {stats['total']} в каталоге. "
         "Список: /sources\n"
-        f"{ai}\n\n"
+        f"{ai_line}\n\n"
         "⚠️ Это не финансовый совет. Решения принимай сам."
     )
 

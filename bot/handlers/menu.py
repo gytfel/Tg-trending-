@@ -9,6 +9,7 @@ from aiogram.types import CallbackQuery, Message
 
 from bot import keyboards, texts
 from bot.callbacks import CANCEL, Nav
+from bot.formatting import esc
 from bot.handlers.common import show
 from bot.services import Services
 from bot.sources.base import Category
@@ -65,7 +66,7 @@ async def profile(event: Message | CallbackQuery, svc: Services) -> None:
 @router.message(Command("help"))
 @router.callback_query(Nav.filter(F.to == "help"))
 async def help_screen(event: Message | CallbackQuery, svc: Services) -> None:
-    text = texts.help_text(svc.settings.daily_limit, svc.registry.stats(), svc.llm.enabled)
+    text = texts.help_text(svc.settings.daily_limit, svc.registry.stats(), svc.ai_status())
     await show(event, text, keyboards.help_kb())
 
 
@@ -88,5 +89,5 @@ async def admin_stats(message: Message, svc: Services) -> None:
     await message.answer(
         f"👥 Пользователей: {await svc.db.count_users()}\n"
         f"🔌 Источников активно: {st['active']} из {st['total']}\n"
-        f"🤖 ИИ: {'вкл, ' + svc.llm.model if svc.llm.enabled else 'выкл'}"
+        f"🤖 ИИ: {esc(svc.ai_status())}"
     )
