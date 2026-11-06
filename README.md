@@ -34,7 +34,61 @@
 Под отчётом есть кнопки «🔔 Следить», «🔄 Обновить» и «📊 Источники» (кто ответил, а кто нет).
 Синие кнопки сделаны через `style="primary"` (Bot API 9.4+).
 
-## Быстрый старт
+## Установка на VPS (одной командой)
+
+Подойдёт сервер на Ubuntu 22.04/24.04, Debian 11/12 или Alma/Rocky 8–9 с root-доступом,
+желательно от 1 ГБ RAM. Входящие порты открывать не нужно: бот сам забирает
+сообщения из Telegram (long polling).
+
+```bash
+ssh root@АДРЕС_СЕРВЕРА
+```
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gytfel/Tg-trending-/refs/heads/main/deploy/install.sh -o install.sh
+```
+
+```bash
+sudo bash install.sh
+```
+
+> Пока код не слит в `main`, укажи ветку: в адресе выше замени `main` на имя ветки
+> и запускай `sudo BRANCH=имя-ветки bash install.sh`.
+
+Скрипт спросит токен бота (от @BotFather), ключ Claude (можно пропустить) и твой
+Telegram ID для админ-доступа. Потом он сам:
+
+1. ставит git, curl и Python. Если системный Python старше 3.11 (например, Ubuntu 22.04),
+   рядом ставится отдельный Python 3.12 через uv — системный не трогается;
+2. скачивает код в `/opt/tg-trending` и ставит зависимости в `.venv`;
+3. создаёт системного пользователя `tgbot`: бот работает не от root и может писать только в `data/`;
+4. записывает `.env` (права 640) и проверяет токен через Telegram;
+5. регистрирует systemd-сервис `tg-trending`: автозапуск при перезагрузке и перезапуск при сбое;
+6. проверяет, какие источники данных доступны с этого сервера.
+
+Запускать скрипт повторно безопасно: он обновит код и зависимости, а `.env` и базу не тронет.
+Без вопросов, например из CI:
+
+```bash
+sudo BOT_TOKEN=123456:AAH... ANTHROPIC_API_KEY=sk-ant-... ADMIN_IDS=111222333 bash install.sh
+```
+
+Управление после установки:
+
+| Команда | Что делает |
+|---|---|
+| `tg-trending status` | работает ли бот |
+| `tg-trending logs` | логи в реальном времени (выход — Ctrl+C) |
+| `tg-trending restart` / `stop` / `start` | перезапуск, остановка, запуск |
+| `tg-trending config` | открыть `.env` в редакторе и перезапустить |
+| `tg-trending update` | подтянуть новую версию с GitHub и перезапустить |
+| `tg-trending probe BTC` | проверить источники данных с сервера |
+| `tg-trending uninstall` | удалить сервис (код и база останутся) |
+
+⚠️ С одним токеном может работать только одна копия бота. Если бот запущен и на
+компьютере, и на сервере, Telegram выдаст ошибку `Conflict: terminated by other getUpdates request`.
+
+## Быстрый старт (локально)
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
@@ -140,6 +194,9 @@ bot/
     providers/       cex, derivatives, aggregators, dex, defi, onchain,
                      security, sentiment, news, social, macro
     probe.py         CLI-проверка и генерация каталога
+deploy/
+  install.sh         установка на VPS: Python, зависимости, .env, systemd
+  manage.sh          команда tg-trending: status, logs, update, config, probe…
 ```
 
 Стек: Python 3.11+, aiogram 3, aiohttp, aiosqlite, pydantic-settings, Anthropic SDK.

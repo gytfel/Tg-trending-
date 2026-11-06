@@ -99,7 +99,10 @@ async def main() -> None:
     dp = build_dispatcher(svc)
     watcher = asyncio.create_task(Watcher(bot, svc.db, svc.prices, settings.watch_interval).run())
     try:
-        await bot.set_my_commands(COMMANDS)
+        try:
+            await bot.set_my_commands(COMMANDS)
+        except Exception as e:  # noqa: BLE001 — меню команд не повод падать; polling сам переподключится
+            log.warning("не удалось обновить меню команд: %r", e)
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         watcher.cancel()
