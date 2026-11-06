@@ -5,16 +5,17 @@ from __future__ import annotations
 import logging
 import re
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
+from aiogram.enums import ChatType
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import StateFilter
+from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from aiogram.utils.chat_action import ChatActionSender
 
 from bot import keyboards, texts
 from bot.callbacks import Ask, Nav, ReportCb
-from bot.formatting import split_message
+from bot.formatting import esc, split_message
 from bot.handlers.common import safe_edit, show
 from bot.handlers.thinking import ThinkingMessage
 from bot.query_parser import parse_query
@@ -62,9 +63,45 @@ async def report_sources(cb: CallbackQuery, svc: Services) -> None:
         await cb.message.answer(part)
 
 
-@router.message(StateFilter(None), F.text, ~F.text.startswith("/"))
+def message_text(message: Message) -> str:
+    """Текст сообщения или подпись (пересланный пост с картинкой)."""
+    return (message.text or message.caption or "").strip()
+
+
+@router.message(Command("ask"))
+async def cmd_ask(message: Message, command: CommandObject, bot: Bot, svc: Services) -> None:
+    """/ask BTC — работает в любом чате, в том числе в группах с включённым privacy mode."""
+    query = (command.args or "").strip()
+    in_group = message.chat.type != ChatType.PRIVATE
+    if not query:
+        await message.reply(texts.GROUP_HINT.format(bot=esc((await bot.me()).username or "bot")))
+        return
+    await run_analysis(message, message.from_user.id, query, svc, reply=in_group)
+
+
+@router.message(StateFilter(None), F.chat.type == ChatType.PRIVATE, F.text | F.caption)
 async def free_text(message: Message, svc: Services) -> None:
-    await run_analysis(message, message.from_user.id, message.text or "", svc)
+    text = message_text(message)
+    if text and not text.startswith("/"):
+        await run_analysis(message, message.from_user.id, text, svc)
+
+
+@router.message(StateFilter(None), F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.text | F.caption)
+async def group_text(message: Message, bot: Bot, svc: Services) -> None:
+    """В группе отвечаем, только если позвали: @упоминание или ответ на сообщение бота."""
+    me = await bot.me()
+    text = message_text(message)
+    mention = f"@{me.username}" if me.username else None
+    mentioned = bool(mention) and mention.lower() in text.lower()
+    reply = message.reply_to_message
+    replied_to_bot = bool(reply and reply.from_user and reply.from_user.id == me.id)
+    if not (mentioned or replied_to_bot) or text.startswith("/"):
+        return
+    query = re.sub(re.escape(mention), " ", text, flags=re.IGNORECASE).strip() if mention else text
+    if not query:
+        await message.reply(texts.GROUP_HINT.format(bot=esc(me.username or "bot")))
+        return
+    await run_analysis(message, message.from_user.id, query, svc, reply=True)
 
 
 async def _send(msg: Message, text: str, kb: InlineKeyboardMarkup | None, edit: bool) -> None:
@@ -79,13 +116,15 @@ async def _send(msg: Message, text: str, kb: InlineKeyboardMarkup | None, edit: 
         await msg.answer(_TAG.sub("", text), reply_markup=kb, parse_mode=None)
 
 
-async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services) -> None:
+async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services, *, reply: bool = False) -> None:
+    """reply=True — в группах отвечаем на сообщение пользователя, чтобы было видно, кому ответ."""
+    respond = chat_msg.reply if reply else chat_msg.answer
     if user_id in svc.busy:
-        await chat_msg.answer(texts.BUSY)
+        await respond(texts.BUSY)
         return
     quota = await svc.quota.status(user_id)
     if quota.left <= 0:
-        await chat_msg.answer(texts.quota_empty(quota.limit), reply_markup=keyboards.back())
+        await respond(texts.quota_empty(quota.limit), reply_markup=keyboards.back())
         return
 
     skills = await svc.db.list_skills(user_id)
@@ -96,7 +135,7 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
     thinking: ThinkingMessage | None = None
     try:
         # «✱ Думаю…» — живое сообщение с ходом обработки; потом оно превратится в отчёт
-        thinking = await ThinkingMessage.start(chat_msg)
+        thinking = await ThinkingMessage.start(chat_msg, reply=reply)
         try:
             async with ChatActionSender.typing(bot=chat_msg.bot, chat_id=chat_msg.chat.id):
                 result = await svc.analyzer.analyze(parsed, used_skills, thinking)

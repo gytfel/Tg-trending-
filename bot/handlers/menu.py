@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -65,9 +65,17 @@ async def profile(event: Message | CallbackQuery, svc: Services) -> None:
 
 @router.message(Command("help"))
 @router.callback_query(Nav.filter(F.to == "help"))
-async def help_screen(event: Message | CallbackQuery, svc: Services) -> None:
-    text = texts.help_text(svc.settings.daily_limit, svc.registry.stats(), svc.ai_status())
-    await show(event, text, keyboards.help_kb())
+async def help_screen(event: Message | CallbackQuery, bot: Bot, svc: Services) -> None:
+    username = (await bot.me()).username
+    text = texts.help_text(
+        username,
+        svc.settings.daily_limit,
+        await svc.quota.status(event.from_user.id),
+        svc.registry.stats(),
+        svc.ai_status(),
+        svc.settings.rules_url,
+    )
+    await show(event, text, keyboards.help_kb(username, svc.settings.support_url))
 
 
 @router.message(Command("sources"))

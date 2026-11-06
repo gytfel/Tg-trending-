@@ -117,9 +117,16 @@ def back(to: str = "menu") -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def help_kb() -> InlineKeyboardMarkup:
+def help_kb(bot_username: str | None = None, support_url: str = "") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
+    top = 0
+    if bot_username:
+        b.button(text="➕ Добавить в чат", url=f"https://t.me/{bot_username}?startgroup=true")
+        top += 1
+    if support_url:
+        b.button(text="💬 Поддержка", url=support_url)
+        top += 1
     b.button(text="🔌 Источники данных", callback_data=Nav(to="sources"))
     b.button(text=BACK, callback_data=Nav(to="menu"))
-    b.adjust(1)
+    b.adjust(*([top] if top else []), 1, 1)
     return b.as_markup()

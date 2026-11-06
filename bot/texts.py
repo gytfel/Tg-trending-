@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from bot.db import Skill, User
-from bot.formatting import esc, plural, progress_bar
+from bot.formatting import esc, esc_attr, plural, progress_bar
 from bot.services.quota import QuotaStatus
 from bot.sources.base import CATEGORY_META, Category
 
@@ -167,23 +167,61 @@ def profile(user: User | None, user_id: int, quota: QuotaStatus, total: int, ski
     )
 
 
-def help_text(limit: int, stats: dict[str, int], ai: str) -> str:
-    ai_line = f"ИИ: {esc(ai)}." if ai != "выключен" else "ИИ: выключен — бот даёт выводы по правилам."
-    return (
+HELP_SKILLS = (
+    "🔎 Разбор монеты — цена, биржи и спред, объёмы, капа, ATH\n"
+    "📈 Деривативы — фандинг, открытый интерес, лонги/шорты, опционы\n"
+    "🛡 Проверка контракта — honeypot, налоги, ликвидность, держатели\n"
+    "⚖️ Сравнение — до трёх монет в одной таблице\n"
+    "🌍 Рынок — капа, доминация BTC, страх и жадность, макро\n"
+    "⛓ Ончейн и DeFi — MVRV, активность сети, TVL, выручка\n"
+    "📰 Новости и соцсети — 30+ лент, Reddit, 4chan, StockTwits\n"
+    "🐝 Рой агентов — ИИ-специалисты + главный аналитик\n"
+    "🔔 Слежки — напишу, когда цена дойдёт до уровня\n"
+    "🧠 Навыки — твои правила и шаблоны ответа"
+)
+
+HELP_EXAMPLES = (
+    "<code>разбери $HYPE</code>\n"
+    "<code>что с фандингом и OI по BTC</code>\n"
+    "<code>сравни ARB и OP</code>\n"
+    "<code>0x6982508145454Ce325dDbE47a25d4ec3d2311933</code> — проверка на скам\n"
+    "<code>что сейчас на рынке?</code>\n"
+    "<code>разбери SOL, навык тейки</code>\n"
+    "<code>BTC &gt; 120000</code> — в разделе 🔔 Слежки"
+)
+
+
+def help_text(
+    bot_username: str | None,
+    limit: int,
+    quota: QuotaStatus,
+    stats: dict[str, int],
+    ai: str,
+    rules_url: str = "",
+) -> str:
+    mention = f"@{esc(bot_username)}" if bot_username else "меня"
+    if quota.unlimited:
+        left = "у тебя безлимит"
+    else:
+        left = f"сегодня осталось {quota.left} из {quota.limit}"
+    ai_line = "рой ИИ-агентов" if ai.startswith("рой") else ("ИИ-аналитик" if ai != "выключен" else "выводы по правилам")
+    parts = [
         "❓ <b>Помощь</b>\n\n"
-        "<b>Как спрашивать</b>\n"
-        "• Тикер: <code>BTC</code>, <code>$HYPE</code>\n"
-        "• Контракт: <code>0x…</code> или адрес Solana — покажу ликвидность и риски\n"
-        "• Сравнение: <i>сравни ARB и OP</i>\n"
-        "• Рынок в целом: <i>что сейчас на рынке?</i>\n\n"
-        "<b>🔔 Слежки</b> — напишу, когда цена дойдёт до уровня: <code>BTC &gt; 120000</code>, <code>SOL ±5%</code>\n"
-        "<b>🧠 Навыки</b> — твои правила и шаблоны, зови в вопросе: <i>разбери BTC, навык тейки</i>\n\n"
-        f"<b>Запас</b> — {limit} разборов в сутки, обновляется в 00:00 UTC.\n"
-        f"<b>Данные</b> — {stats['active']} подключённых источников из {stats['total']} в каталоге. "
-        "Список: /sources\n"
-        f"{ai_line}\n\n"
-        "⚠️ Это не финансовый совет. Решения принимай сам."
-    )
+        "Пиши как в чате: тикер, вопрос или пересланный пост — соберу данные "
+        f"из {stats['active']} источников и отвечу с цифрами. Разделы ниже раскрываются нажатием.",
+        f"<b>Что умею</b>\n<blockquote expandable>{HELP_SKILLS}</blockquote>",
+        f"<b>Примеры вопросов</b>\n<blockquote expandable>{HELP_EXAMPLES}</blockquote>",
+        "<b>В чатах</b>\n<blockquote>"
+        f"Добавь меня в группу и упомяни {mention} с вопросом — или ответь на моё сообщение.\n"
+        "Ещё можно командой: <code>/ask BTC</code></blockquote>",
+        "<b>Лимиты</b>\n<blockquote>"
+        f"{limit} {plural(limit, 'разбор', 'разбора', 'разборов')} в сутки, запас обновляется в 00:00 UTC — {left}.\n"
+        "Слежки работают без лимита.</blockquote>",
+        f"<i>Сейчас работает: {ai_line} · /sources — все источники. Не финансовый совет.</i>",
+    ]
+    if rules_url:
+        parts.append(f'<a href="{esc_attr(rules_url)}">Правила использования</a>')
+    return "\n\n".join(parts)
 
 
 def sources_screen(stats: dict[str, int], per_cat: dict[Category, tuple[int, int, int]]) -> str:
@@ -222,6 +260,8 @@ NOT_FOUND = (
 def not_listed(what: str) -> str:
     return f"Не нашёл данных по <b>{esc(what)}</b> 🤷\nПроверь тикер или пришли адрес контракта. Запас не списан."
 
+
+GROUP_HINT = "Спроси меня так: <code>@{bot} BTC</code> или <code>/ask BTC</code>"
 
 ERROR = "😵 Что-то пошло не так при разборе. Попробуй ещё раз через минуту — запас не списан."
 NO_LAST = "Не помню прошлый запрос — пришли его ещё раз."

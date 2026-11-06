@@ -34,6 +34,7 @@ log = logging.getLogger("bot")
 
 COMMANDS = [
     BotCommand(command="start", description="Главное меню"),
+    BotCommand(command="ask", description="Спросить: /ask BTC (работает и в группах)"),
     BotCommand(command="help", description="Как пользоваться"),
     BotCommand(command="profile", description="Профиль и запас"),
     BotCommand(command="sources", description="Источники данных"),

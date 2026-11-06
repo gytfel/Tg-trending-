@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     bot_token: str
     bot_name: str = "Trending"
     admin_ids: str = ""  # через запятую: безлимит и /sources с проверкой
+    support_url: str = ""  # кнопка «💬 Поддержка» в помощи, например https://t.me/your_support
+    rules_url: str = ""  # ссылка «Правила использования» в помощи
 
     # Хранилище
     database_path: str = "data/bot.sqlite3"

@@ -10,7 +10,7 @@ from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.base import BaseSession
 from aiogram.enums import ParseMode
-from aiogram.methods import AnswerCallbackQuery, EditMessageText, SendMessage
+from aiogram.methods import AnswerCallbackQuery, EditMessageText, GetMe, SendMessage
 from aiogram.types import CallbackQuery, Chat, Message, MessageEntity, Update, User
 
 from bot.ai import AIHub
@@ -49,6 +49,8 @@ class FakeSession(BaseSession):
             ).as_(bot)  # как настоящая сессия: ответ привязан к боту
         if isinstance(method, AnswerCallbackQuery):
             return True
+        if isinstance(method, GetMe):
+            return BOT_USER
         return True
 
     async def close(self):
@@ -78,16 +80,25 @@ class FakeSession(BaseSession):
 
 USER = User(id=UID, is_bot=False, first_name="Тест", username="tester")
 CHAT = Chat(id=UID, type="private")
+GROUP = Chat(id=-100500, type="supergroup", title="Трейдеры")
+BOT_USER = User(id=777, is_bot=True, first_name="Trending", username="trending_test_bot")
 
 
-def msg(text: str) -> Update:
+def msg(text: str | None, chat: Chat = CHAT, *, caption: str | None = None, reply_to: Message | None = None) -> Update:
     entities = None
-    if text.startswith("/"):
+    if text and text.startswith("/"):
         entities = [MessageEntity(type="bot_command", offset=0, length=len(text.split()[0]))]
     return Update(
         update_id=next(_ids),
         message=Message(
-            message_id=next(_ids), date=datetime.now(), chat=CHAT, from_user=USER, text=text, entities=entities
+            message_id=next(_ids),
+            date=datetime.now(),
+            chat=chat,
+            from_user=USER,
+            text=text,
+            caption=caption,
+            entities=entities,
+            reply_to_message=reply_to,
         ),
     )
 
@@ -193,7 +204,9 @@ async def test_free_text_spends_quota_and_unknown_does_not(env):
     await feed(msg("разбери BTC"))
     sent = [r for r in session.requests if isinstance(r, SendMessage)]
     assert sent[-1].text.startswith("✱ <b>Думаю")  # сначала «думает»…
-    assert isinstance(session.last(), EditMessageText) and "Bitcoin" in session.last().text  # …потом то же сообщение становится отчётом
+    assert (
+        isinstance(session.last(), EditMessageText) and "Bitcoin" in session.last().text
+    )  # …потом то же сообщение становится отчётом
     assert (await svc.quota.status(UID)).used == 1
     await feed(msg("привет"))
     assert "Не нашёл монету" in session.last().text
@@ -276,7 +289,12 @@ async def test_profile_help_sources(env):
     await feed(msg("/profile"))
     assert "👤 <b>Профиль</b>" in session.last().text and f"<code>{UID}</code>" in session.last().text
     await feed(cb("nav:help"))
-    assert "❓ <b>Помощь</b>" in session.last().text
+    help_text = session.last().text
+    assert "❓ <b>Помощь</b>" in help_text and "<blockquote expandable>" in help_text
+    assert "упомяни @trending_test_bot" in help_text and "сегодня осталось 4 из 4" in help_text
+    add = session.last().reply_markup.inline_keyboard[0][0]
+    assert add.text == "➕ Добавить в чат" and add.url == "https://t.me/trending_test_bot?startgroup=true"
+    assert "💬 Поддержка" not in session.buttons()  # SUPPORT_URL не задан
     await feed(cb("nav:sources"))
     assert "🔌 <b>Источники данных</b>" in session.last().text
 
@@ -289,3 +307,38 @@ async def test_report_sources_and_refresh(env):
     n = len(session.texts())
     await feed(cb("rp:refresh"))
     assert len(session.texts()) > n and "Bitcoin" in session.last().text
+
+
+def sent_texts(session) -> list[str]:
+    return [r.text for r in session.requests if isinstance(r, (SendMessage, EditMessageText))]
+
+
+async def test_group_answers_only_when_called(env):
+    session, feed, svc = env
+    await feed(msg("BTC сегодня летит", GROUP))  # бота не звали — молчит
+    assert sent_texts(session) == []
+    await feed(msg("@trending_test_bot разбери BTC", GROUP))
+    first = [r for r in session.requests if isinstance(r, SendMessage)][0]
+    assert first.chat_id == GROUP.id and first.reply_parameters is not None  # ответ на сообщение пользователя
+    assert "Bitcoin" in session.last().text
+    assert (await svc.quota.status(UID)).used == 1
+
+
+async def test_group_reply_to_bot_and_ask_command(env):
+    session, feed, svc = env
+    bot_msg = Message(message_id=1, date=datetime.now(), chat=GROUP, from_user=BOT_USER, text="отчёт")
+    await feed(msg("а что по BTC?", GROUP, reply_to=bot_msg))
+    assert "Bitcoin" in session.last().text
+    await feed(msg("/ask BTC", GROUP))
+    assert "Bitcoin" in session.last().text
+    await feed(msg("/ask", GROUP))
+    assert "/ask BTC" in session.last().text  # подсказка, как спрашивать
+    await feed(msg("@trending_test_bot", GROUP))
+    assert "@trending_test_bot BTC" in session.last().text
+    assert (await svc.quota.status(UID)).used == 2
+
+
+async def test_forwarded_post_with_caption(env):
+    session, feed, _ = env
+    await feed(msg(None, caption="Smart money скупает $BTC перед ФРС"))
+    assert "Bitcoin" in session.last().text

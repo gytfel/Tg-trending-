@@ -50,10 +50,11 @@ class ThinkingMessage(Progress):
         self._ticker: asyncio.Task | None = None
 
     @classmethod
-    async def start(cls, chat: Message, **kwargs) -> ThinkingMessage:
+    async def start(cls, chat: Message, *, reply: bool = False, **kwargs) -> ThinkingMessage:
+        """reply=True — ответом на сообщение пользователя (в группах)."""
         self = cls(**kwargs)
         text = self.render()
-        self.message = await chat.answer(text)
+        self.message = await (chat.reply(text) if reply else chat.answer(text))
         self._last_text, self._last_edit = text, self.clock()
         self._ticker = asyncio.create_task(self._tick())
         return self
