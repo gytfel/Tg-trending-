@@ -40,10 +40,12 @@ class FakeSession(BaseSession):
     async def make_request(self, bot, method, timeout=None):
         self.requests.append(method)
         if isinstance(method, (SendMessage, EditMessageText)):
+            chat_id = method.chat_id or UID
             return Message(
-                message_id=next(_ids),
+                # правка возвращает то же сообщение, отправка — новое
+                message_id=method.message_id if isinstance(method, EditMessageText) else next(_ids),
                 date=datetime.now(),
-                chat=Chat(id=method.chat_id or UID, type="private"),
+                chat=Chat(id=chat_id, type="private" if chat_id > 0 else "supergroup"),
                 text=method.text,
                 reply_markup=method.reply_markup,
             ).as_(bot)  # как настоящая сессия: ответ привязан к боту
@@ -82,9 +84,18 @@ USER = User(id=UID, is_bot=False, first_name="Тест", username="tester")
 CHAT = Chat(id=UID, type="private")
 GROUP = Chat(id=-100500, type="supergroup", title="Трейдеры")
 BOT_USER = User(id=777, is_bot=True, first_name="Trending", username="trending_test_bot")
+OTHER = User(id=43, is_bot=False, first_name="Петя")
+LINK = "https://t.me/trending_test_bot?start="
 
 
-def msg(text: str | None, chat: Chat = CHAT, *, caption: str | None = None, reply_to: Message | None = None) -> Update:
+def msg(
+    text: str | None,
+    chat: Chat = CHAT,
+    *,
+    caption: str | None = None,
+    reply_to: Message | None = None,
+    user: User = USER,
+) -> Update:
     entities = None
     if text and text.startswith("/"):
         entities = [MessageEntity(type="bot_command", offset=0, length=len(text.split()[0]))]
@@ -94,7 +105,7 @@ def msg(text: str | None, chat: Chat = CHAT, *, caption: str | None = None, repl
             message_id=next(_ids),
             date=datetime.now(),
             chat=chat,
-            from_user=USER,
+            from_user=user,
             text=text,
             caption=caption,
             entities=entities,
@@ -103,15 +114,17 @@ def msg(text: str | None, chat: Chat = CHAT, *, caption: str | None = None, repl
     )
 
 
-def cb(data: str) -> Update:
+def cb(data: str, chat: Chat = CHAT, *, user: User = USER, message_id: int | None = None) -> Update:
     return Update(
         update_id=next(_ids),
         callback_query=CallbackQuery(
             id=str(next(_ids)),
-            from_user=USER,
+            from_user=user,
             chat_instance="ci",
             data=data,
-            message=Message(message_id=next(_ids), date=datetime.now(), chat=CHAT, from_user=USER, text="…"),
+            message=Message(
+                message_id=message_id or next(_ids), date=datetime.now(), chat=chat, from_user=BOT_USER, text="…"
+            ),
         ),
     )
 
@@ -342,3 +355,109 @@ async def test_forwarded_post_with_caption(env):
     session, feed, _ = env
     await feed(msg(None, caption="Smart money скупает $BTC перед ФРС"))
     assert "Bitcoin" in session.last().text
+
+
+# --- личные разделы в группах -----------------------------------------------------------------
+
+
+def answers(session) -> list[AnswerCallbackQuery]:
+    return [r for r in session.requests if isinstance(r, AnswerCallbackQuery)]
+
+
+async def test_group_menu_has_no_personal_data(env):
+    session, feed, _ = env
+    await feed(msg("/start", GROUP))
+    text = session.last().text
+    assert "Спроси меня прямо здесь" in text and "@trending_test_bot BTC" in text
+    assert "Запас на сегодня" not in text and "Слежки —" not in text
+    assert session.buttons() == ["✱ Разобрать монету", "❓ Помощь", "👤 Мои настройки"]
+    assert session.last().reply_markup.inline_keyboard[1][1].url == LINK + "menu"
+    await feed(cb("nav:menu", GROUP))  # «← Назад» из помощи в группе — тоже групповое меню
+    assert "Спроси меня прямо здесь" in session.last().text
+
+
+@pytest.mark.parametrize(
+    ("data", "payload"),
+    [
+        ("nav:skills", "skills"),
+        ("nav:watches", "watches"),
+        ("nav:profile", "profile"),
+        ("sk:new:0", "skills"),
+        ("sk:view:5", "skills"),
+        ("wt:del:3:", "watches"),
+        ("wt:new:0:BTC", "watch_BTC"),
+        ("wt:new:0:../evil", "watches"),  # подделанный тикер не попадает в ссылку
+    ],
+)
+async def test_personal_buttons_in_group_open_private_chat(env, data, payload):
+    session, feed, svc = env
+    await feed(cb(data, GROUP))
+    assert answers(session)[-1].url == LINK + payload
+    assert sent_texts(session) == []  # общее сообщение в группе не тронуто
+
+
+async def test_group_click_does_not_start_dialog(env):
+    session, feed, svc = env
+    await feed(cb("sk:new:0", GROUP))
+    await feed(msg("мой секретный навык", GROUP))  # не станет именем навыка и не уйдёт в разбор
+    assert await svc.db.count_skills(UID) == 0
+    assert sent_texts(session) == []
+
+
+async def test_profile_command_in_group(env):
+    session, feed, _ = env
+    await feed(msg("/profile", GROUP))
+    req = session.last()
+    assert req.text == "Это личный раздел — открываю в личке 👇" and req.reply_parameters is not None
+    assert req.reply_markup.inline_keyboard[0][0].url == LINK + "profile"
+
+
+async def test_help_in_group_hides_personal_quota(env):
+    session, feed, _ = env
+    await feed(cb("nav:help", GROUP))
+    text = session.last().text
+    assert "считается для каждого отдельно" in text and "сегодня осталось" not in text
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ("skills", "🧠 <b>Навыки</b>"),
+        ("watches", "🔔 <b>Слежки</b>"),
+        ("profile", "👤 <b>Профиль</b>"),
+        ("help", "❓ <b>Помощь</b>"),
+        ("menu", "ИИ-аналитик"),
+        ("watch_bad!", "ИИ-аналитик"),
+        ("whatever", "ИИ-аналитик"),
+    ],
+)
+async def test_deep_links_open_sections_in_private(env, payload, expected):
+    session, feed, _ = env
+    await feed(msg(f"/start {payload}"))
+    assert expected in session.last().text
+
+
+async def test_deep_link_watch_for_symbol(env):
+    session, feed, svc = env
+    await feed(msg("/start watch_BTC"))
+    assert "Слежка за <b>BTC</b>" in session.last().text
+    await feed(msg("±5%"))
+    assert "BTC ±5%" in session.last().text and await svc.db.count_watches(UID) == 1
+
+
+async def test_report_buttons_follow_their_report(env):
+    session, feed, svc = env
+    await feed(msg("сравни BTC и ETH, навык секрет"))  # личный запрос Васи в личке
+    await feed(msg("@trending_test_bot разбери BTC", GROUP, user=OTHER))  # Петя спросил в группе
+    report = session.last()
+    n = len(sent_texts(session))
+    # Вася жмёт «Обновить» под отчётом Пети: перезапускается запрос Пети, а не личный запрос Васи
+    await feed(cb("rp:refresh", GROUP, message_id=report.message_id))
+    assert len(sent_texts(session)) > n
+    assert svc.last[UID].text == "@trending_test_bot разбери BTC".split(" ", 1)[1]
+    assert not any("секрет" in t for t in sent_texts(session)[n:])
+    # под неизвестным сообщением в группе — не подставляем личный запрос нажавшего
+    before = len(sent_texts(session))
+    await feed(cb("rp:sources", GROUP, message_id=999999))
+    assert answers(session)[-1].show_alert
+    assert len(sent_texts(session)) == before  # в группу ничего не ушло

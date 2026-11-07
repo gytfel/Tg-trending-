@@ -41,12 +41,26 @@ class Services:
     hub: AIHub | None = None
     busy: set[int] = field(default_factory=set)  # пользователи, у которых идёт разбор
     last: OrderedDict[int, LastQuery] = field(default_factory=OrderedDict)
+    # отчёт -> запрос: кнопки «Обновить» и «Источники» относятся к своему отчёту, а не к нажавшему
+    reports: OrderedDict[tuple[int, int], LastQuery] = field(default_factory=OrderedDict)
 
     def ai_status(self) -> str:
         lead = self.llm.ref.short if self.llm.enabled else None
         if self.swarm is not None and self.swarm.enabled:
             return f"рой агентов: {self.swarm.describe()}" + (f" + главный аналитик ({lead})" if lead else "")
         return f"один аналитик ({lead})" if lead else "выключен"
+
+    def remember_report(
+        self, chat_id: int, message_id: int, text: str, result: AnalysisResult, keep: int = 5000
+    ) -> None:
+        key = (chat_id, message_id)
+        self.reports[key] = LastQuery(text, result)
+        self.reports.move_to_end(key)
+        while len(self.reports) > keep:
+            self.reports.popitem(last=False)
+
+    def report_for(self, chat_id: int, message_id: int) -> LastQuery | None:
+        return self.reports.get((chat_id, message_id))
 
     def remember(self, user_id: int, text: str, result: AnalysisResult, keep: int = 2000) -> None:
         self.last[user_id] = LastQuery(text, result)

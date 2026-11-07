@@ -26,6 +26,19 @@ def main_menu(bot_name: str, quota: QuotaStatus, watches: int) -> str:
     )
 
 
+def group_menu(bot_name: str, bot_username: str | None) -> str:
+    """Меню в группе: без личного запаса и слежек — они открываются в личке."""
+    ask = f"<code>@{esc(bot_username)} BTC</code> или " if bot_username else ""
+    return (
+        f"{STAR} <b>{esc(bot_name)}</b> · ИИ-аналитик\n\n"
+        f"Спроси меня прямо здесь: {ask}<code>/ask BTC</code>\n"
+        "Навыки, слежки и профиль — в личке, чтобы не светить их в общем чате."
+    )
+
+
+PRIVATE_ONLY = "Это личный раздел — открываю в личке 👇"
+
+
 def analyze_screen(hours: int, has_fallback: bool) -> str:
     legend = f"<i>🔥 — чаще всего спрашивают за {hours} ч</i>"
     if has_fallback:
@@ -194,13 +207,16 @@ HELP_EXAMPLES = (
 def help_text(
     bot_username: str | None,
     limit: int,
-    quota: QuotaStatus,
+    quota: QuotaStatus | None,
     stats: dict[str, int],
     ai: str,
     rules_url: str = "",
 ) -> str:
+    """quota=None — в группе: личный остаток запаса там не показываем."""
     mention = f"@{esc(bot_username)}" if bot_username else "меня"
-    if quota.unlimited:
+    if quota is None:
+        left = "считается для каждого отдельно"
+    elif quota.unlimited:
         left = "у тебя безлимит"
     else:
         left = f"сегодня осталось {quota.left} из {quota.limit}"

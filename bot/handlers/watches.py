@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -29,22 +31,39 @@ async def watches_screen(cb: CallbackQuery, state: FSMContext, svc: Services) ->
     await render_watches(cb, svc)
 
 
-@router.callback_query(WatchCb.filter(F.action == "new"))
-async def watch_new(cb: CallbackQuery, callback_data: WatchCb, state: FSMContext, svc: Services) -> None:
-    if await svc.db.count_watches(cb.from_user.id) >= svc.settings.max_watches:
-        await cb.answer(texts.WATCH_LIMIT, show_alert=True)
-        return
-    symbol = callback_data.symbol.upper() or None
+SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9]{1,14}$")
+
+
+def clean_symbol(raw: str | None) -> str | None:
+    """Тикер из кнопки или ссылки: данные кнопок можно подделать, поэтому проверяем формат."""
+    sym = (raw or "").strip().upper()
+    return sym if SYMBOL_RE.match(sym) else None
+
+
+async def ask_watch_condition(chat: Message, user_id: int, symbol: str | None, state: FSMContext, svc: Services) -> bool:
+    """Просит условие слежки. False — если упёрлись в лимит."""
+    if await svc.db.count_watches(user_id) >= svc.settings.max_watches:
+        await chat.answer(texts.WATCH_LIMIT, reply_markup=keyboards.back("watches"))
+        return False
     await state.set_state(WatchForm.condition)
     await state.update_data(watch_symbol=symbol)
-    await cb.answer()
     if symbol:
         price = await svc.prices.price(symbol)
         text = texts.watch_ask_for(symbol, fmt_price(price) if price else None)
     else:
         text = texts.WATCH_ASK
+    await chat.answer(text, reply_markup=keyboards.cancel())
+    return True
+
+
+@router.callback_query(WatchCb.filter(F.action == "new"))
+async def watch_new(cb: CallbackQuery, callback_data: WatchCb, state: FSMContext, svc: Services) -> None:
+    if await svc.db.count_watches(cb.from_user.id) >= svc.settings.max_watches:
+        await cb.answer(texts.WATCH_LIMIT, show_alert=True)
+        return
+    await cb.answer()
     if isinstance(cb.message, Message):
-        await cb.message.answer(text, reply_markup=keyboards.cancel())
+        await ask_watch_condition(cb.message, cb.from_user.id, clean_symbol(callback_data.symbol), state, svc)
 
 
 @router.message(WatchForm.condition, F.text)

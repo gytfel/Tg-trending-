@@ -24,6 +24,27 @@ def main_menu() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def group_menu(bot_username: str | None) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="✱ Разобрать монету", callback_data=Nav(to="analyze"), style=PRIMARY)
+    b.button(text="❓ Помощь", callback_data=Nav(to="help"))
+    if bot_username:
+        b.button(text="👤 Мои настройки", url=private_link(bot_username, "menu"))
+    b.adjust(1, 2)
+    return b.as_markup()
+
+
+def private_link(bot_username: str, payload: str) -> str:
+    """Ссылка, которая открывает личный чат с ботом сразу на нужном разделе (/start <payload>)."""
+    return f"https://t.me/{bot_username}?start={payload}"
+
+
+def open_private(bot_username: str, payload: str, text: str = "👤 Открыть в личке") -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text=text, url=private_link(bot_username, payload))
+    return b.as_markup()
+
+
 def analyze(trending: list[tuple[str, bool]]) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for symbol, hot in trending:

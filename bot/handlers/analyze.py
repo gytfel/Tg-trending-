@@ -41,19 +41,35 @@ async def ask_symbol(cb: CallbackQuery, callback_data: Ask, svc: Services) -> No
         await run_analysis(cb.message, cb.from_user.id, callback_data.symbol, svc)
 
 
+def report_of(cb: CallbackQuery, svc: Services):
+    """Запрос, к которому относится отчёт под кнопкой.
+
+    В личке, если отчёт старый (бот перезапускался), берём последний запрос
+    пользователя. В группе — только сам отчёт: иначе чужая кнопка вывела бы
+    в общий чат последний личный запрос нажавшего.
+    """
+    if not isinstance(cb.message, Message):
+        return None
+    found = svc.report_for(cb.message.chat.id, cb.message.message_id)
+    if found is None and cb.message.chat.type == ChatType.PRIVATE:
+        found = svc.last.get(cb.from_user.id)
+    return found
+
+
 @router.callback_query(ReportCb.filter(F.action == "refresh"))
 async def refresh(cb: CallbackQuery, svc: Services) -> None:
-    last = svc.last.get(cb.from_user.id)
+    last = report_of(cb, svc)
     if last is None or not isinstance(cb.message, Message):
         await cb.answer(texts.NO_LAST, show_alert=True)
         return
     await cb.answer("Обновляю…")
-    await run_analysis(cb.message, cb.from_user.id, last.text, svc)
+    in_group = cb.message.chat.type != ChatType.PRIVATE
+    await run_analysis(cb.message, cb.from_user.id, last.text, svc, reply=in_group)
 
 
 @router.callback_query(ReportCb.filter(F.action == "sources"))
 async def report_sources(cb: CallbackQuery, svc: Services) -> None:
-    last = svc.last.get(cb.from_user.id)
+    last = report_of(cb, svc)
     if last is None or not isinstance(cb.message, Message):
         await cb.answer(texts.NO_LAST, show_alert=True)
         return
@@ -104,16 +120,15 @@ async def group_text(message: Message, bot: Bot, svc: Services) -> None:
     await run_analysis(message, message.from_user.id, query, svc, reply=True)
 
 
-async def _send(msg: Message, text: str, kb: InlineKeyboardMarkup | None, edit: bool) -> None:
+async def _send(msg: Message, text: str, kb: InlineKeyboardMarkup | None, edit: bool) -> Message:
     try:
         if edit:
-            await safe_edit(msg, text, kb)
-        else:
-            await msg.answer(text, reply_markup=kb)
+            return await safe_edit(msg, text, kb)
+        return await msg.answer(text, reply_markup=kb)
     except TelegramBadRequest as e:
         # страховка от битой разметки: отправляем без HTML
         log.warning("send failed (%s), falling back to plain text", e)
-        await msg.answer(_TAG.sub("", text), reply_markup=kb, parse_mode=None)
+        return await msg.answer(_TAG.sub("", text), reply_markup=kb, parse_mode=None)
 
 
 async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services, *, reply: bool = False) -> None:
@@ -168,4 +183,6 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
     parts = split_message(result.text)
     for i, part in enumerate(parts):
         last = i == len(parts) - 1
-        await _send(progress if i == 0 else chat_msg, part, kb if last else None, edit=i == 0)
+        sent = await _send(progress if i == 0 else chat_msg, part, kb if last else None, edit=i == 0)
+        if last:  # кнопки висят на последней части отчёта
+            svc.remember_report(sent.chat.id, sent.message_id, text, result)
