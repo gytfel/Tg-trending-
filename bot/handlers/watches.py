@@ -40,7 +40,9 @@ def clean_symbol(raw: str | None) -> str | None:
     return sym if SYMBOL_RE.match(sym) else None
 
 
-async def ask_watch_condition(chat: Message, user_id: int, symbol: str | None, state: FSMContext, svc: Services) -> bool:
+async def ask_watch_condition(
+    chat: Message, user_id: int, symbol: str | None, state: FSMContext, svc: Services
+) -> bool:
     """Просит условие слежки. False — если упёрлись в лимит."""
     if await svc.db.count_watches(user_id) >= svc.settings.max_watches:
         await chat.answer(texts.WATCH_LIMIT, reply_markup=keyboards.back("watches"))
