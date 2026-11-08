@@ -23,7 +23,7 @@ class WatchCb(CallbackData, prefix="wt"):
 
 
 class ReportCb(CallbackData, prefix="rp"):
-    action: str  # refresh | sources
+    action: str  # refresh | sources | details
 
 
 CANCEL = "cancel"

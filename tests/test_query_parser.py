@@ -65,6 +65,9 @@ def test_solana_contract():
 def test_market_question():
     q = parse_query("что сейчас на рынке?")
     assert q.market and q.is_empty
+    for text in ("что пишут?", "какие новости", "что нового в крипте"):
+        assert parse_query(text).market, text
+    assert parse_query("новости по BTC").symbols == ["BTC"]  # с тикером — разбор монеты
 
 
 def test_skill_extracted_and_removed():

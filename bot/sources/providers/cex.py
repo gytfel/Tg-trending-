@@ -11,6 +11,7 @@ from bot.sources.base import (
     NoData,
     Quote,
     Scope,
+    Series,
     change_from_open,
     first,
     mul,
@@ -423,6 +424,32 @@ async def digifinex(ctx: Ctx):
         low_24h=num(t.get("low")),
         pair=f"{ctx.sym}/USDT",
     )
+
+
+def _closes(rows: list, idx: int = 4) -> list[float]:
+    out = [num(r[idx]) for r in rows if isinstance(r, list) and len(r) > idx]
+    return [x for x in out if x]
+
+
+@source("binance_klines", "Binance — свечи", homepage="https://www.binance.com", when=USDT, **CEX)
+async def binance_klines(ctx: Ctx):
+    rows = await ctx.http.get_json(
+        "https://api.binance.com/api/v3/klines",
+        {"symbol": f"{ctx.sym}USDT", "interval": "1h", "limit": 168},
+        ttl=600,
+    )
+    return Series(points=_closes(rows), interval="1h")
+
+
+@source("bybit_klines", "Bybit — свечи", homepage="https://www.bybit.com", when=USDT, **CEX)
+async def bybit_klines(ctx: Ctx):
+    d = await ctx.http.get_json(
+        "https://api.bybit.com/v5/market/kline",
+        {"category": "spot", "symbol": f"{ctx.sym}USDT", "interval": 60, "limit": 168},
+        ttl=600,
+    )
+    rows = list(reversed((d.get("result") or {}).get("list") or []))  # Bybit отдаёт от новых к старым
+    return Series(points=_closes(rows), interval="1h")
 
 
 STABLES = {"USDT", "USDC", "FDUSD", "TUSD", "DAI", "USDP", "BUSD", "USDE", "USD1", "EUR", "TRY"}

@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from bot.sources.base import (
     Asset,
     Category,
+    CoinRow,
     DataSource,
     Derivatives,
     DexPair,
@@ -22,11 +23,41 @@ from bot.sources.base import (
     NoData,
     Quote,
     Security,
+    Series,
     SourceResult,
 )
 from bot.sources.http import Http, HttpError
 
 log = logging.getLogger(__name__)
+
+DEX_PRICE_TOLERANCE = 0.25  # DEX-пул по тикеру считаем настоящим, если цена в пределах ±25% от бирж
+
+# Биржи с надёжной статистикой объёма (имена — как в реестре источников)
+MAJOR_EXCHANGES = {
+    "Binance",
+    "Coinbase",
+    "OKX",
+    "Bybit",
+    "Upbit",
+    "Bitget",
+    "Kraken",
+    "KuCoin",
+    "Gate",
+    "HTX (Huobi)",
+    "Crypto.com Exchange",
+    "Bitfinex",
+    "Bitstamp",
+    "Gemini",
+    "Binance.US",
+}
+
+# В карточку «Рынок · 24ч» не берём стейблкоины и обёрнутые токены
+NOT_IN_TOP = {
+    "USDT", "USDC", "USDE", "DAI", "USDS", "FDUSD", "TUSD", "USDD", "PYUSD", "USD1", "BUSD", "USDP",
+    "USDTB", "USDF", "RLUSD", "USDG", "USDX", "SUSDE", "SUSDS", "BSC-USD", "GHO", "FRAX", "LUSD",
+    "WBTC", "WETH", "STETH", "WSTETH", "WEETH", "CBBTC", "RETH", "METH", "EZETH", "RSETH",
+    "WBETH", "SOLVBTC", "LBTC", "JITOSOL", "MSOL", "BNSOL", "WBNB", "XAUT", "PAXG",
+}  # fmt: skip
 
 
 @dataclass(slots=True)
@@ -52,18 +83,42 @@ class Snapshot:
     def derivatives(self) -> list[tuple[str, Derivatives]]:
         return [(r.name, r.derivatives) for r in self.results if r.derivatives]
 
+    def reference_price(self) -> float | None:
+        """Цена бирж или агрегаторов — без DEX (для проверки DEX-пулов)."""
+        prices = [q.price for _, q in self.quotes()] or [m.price for _, m in self.markets() if m.price]
+        return statistics.median(prices) if prices else None
+
     def dex_pairs(self) -> list[DexPair]:
         seen: set[str] = set()
         out: list[DexPair] = []
+        # По тикеру DEX находит и подделки с тем же тикером (токены «BTC» на Solana с выдуманной
+        # ликвидностью). Если есть цена бирж, оставляем только пулы с близкой ценой.
+        ref = None if (self.asset and self.asset.contract) else self.reference_price()
         for r in self.results:
             for p in r.dex_pairs:
                 key = f"{p.chain}:{p.pair_address}".lower()
                 if key in seen:
                     continue
                 seen.add(key)
+                if ref and (not p.price_usd or abs(p.price_usd - ref) / ref > DEX_PRICE_TOLERANCE):
+                    continue
                 out.append(p)
         out.sort(key=lambda p: p.liquidity_usd or 0, reverse=True)
         return out
+
+    def top_coins(self, n: int = 20) -> list[CoinRow]:
+        """Топ монет по капитализации без стейблкоинов и обёрнутых токенов."""
+        for r in self.results:
+            rows = [c for c in r.rows if c.symbol.upper() not in NOT_IN_TOP and c.price]
+            if len(rows) >= 4:
+                return rows[:n]
+        return []
+
+    def series(self) -> Series | None:
+        for r in self.results:
+            if r.series is not None:
+                return r.series
+        return None
 
     def news(self, limit: int = 5) -> list[NewsItem]:
         seen: set[str] = set()
@@ -145,8 +200,9 @@ class Snapshot:
         return sum(vols) if vols else None
 
     def top_exchanges(self, n: int = 3) -> list[tuple[str, Quote]]:
+        """Где больше всего объёма. Сначала крупные биржи: у мелких объём часто накручен."""
         qs = [(name, q) for name, q in self.quotes() if q.volume_24h]
-        qs.sort(key=lambda x: x[1].volume_24h or 0, reverse=True)
+        qs.sort(key=lambda x: (x[0] in MAJOR_EXCHANGES, x[1].volume_24h or 0), reverse=True)
         return qs[:n]
 
     def funding(self) -> tuple[float, int] | None:

@@ -11,7 +11,8 @@ from dataclasses import dataclass, field
 from bot.db import Skill
 from bot.formatting import esc, short_addr
 from bot.query_parser import ParsedQuery
-from bot.services import report, swarm
+from bot.render import Card
+from bot.services import cards, prose, report, swarm
 from bot.services.llm import LLM, to_html
 from bot.services.progress import Progress
 from bot.services.swarm import Swarm
@@ -83,6 +84,8 @@ class AnalysisResult:
     elapsed: float = 0.0
     used_llm: bool = False
     agents: list[swarm.AgentResult] = field(default_factory=list)
+    card: Card | None = None  # данные для картинки-карточки (рисует handler)
+    caption: str = ""  # живой текст под карточкой (ИИ или по шаблону)
 
     @property
     def found(self) -> bool:
@@ -150,7 +153,7 @@ class Analyzer:
             (g,) = await self._collect_all([(self.registry.for_overview(), None)], progress)
             body = report.overview_section(g)
             news = report.news_block(g, limit=5)
-            verdict, used, agents = await self._verdict(q, [], g, skills, progress)
+            verdict, used, agents, ai_html = await self._verdict(q, [], g, skills, progress)
             text = "\n\n".join(
                 p for p in (body, news, verdict, report.footer(g.ok_count(), g.asked, time.monotonic() - t0)) if p
             )
@@ -163,6 +166,8 @@ class Analyzer:
                 elapsed=time.monotonic() - t0,
                 used_llm=used,
                 agents=agents,
+                card=cards.build_card("overview", [], g),
+                caption=self._caption("overview", [], g, ai_html, agents, skills),
             )
 
         labels = ", ".join(v if k == "symbol" else short_addr(v) for k, v in targets)
@@ -192,7 +197,7 @@ class Analyzer:
         if ml:
             sections.append(ml)
 
-        verdict, used, agents = await self._verdict(q, found, g, skills, progress)
+        verdict, used, agents, ai_html = await self._verdict(q, found, g, skills, progress)
         if verdict:
             sections.append(verdict)
 
@@ -214,7 +219,42 @@ class Analyzer:
             elapsed=elapsed,
             used_llm=used,
             agents=agents,
+            card=cards.build_card(kind, found, g),
+            caption=self._caption(kind, found, g, ai_html, agents, skills),
         )
+
+    @staticmethod
+    def _caption(
+        kind: str,
+        found: list[Snapshot],
+        g: Snapshot | None,
+        ai_html: str | None,
+        agents: list[swarm.AgentResult],
+        skills: list[Skill],
+    ) -> str:
+        """Живой текст под карточкой: ответ ИИ, а без него — связный текст по шаблону."""
+        head = []
+        ok = [a for a in agents if a.ok]
+        if ok:
+            counts = " · ".join(
+                f"{icon} {n}" for sig, icon in swarm.SIGNAL_ICON.items() if (n := sum(1 for a in ok if a.signal == sig))
+            )
+            head.append(f"🐝 Рой из {len(ok)} {'агента' if len(ok) == 1 else 'агентов'}: {counts}")
+        if skills and ai_html:
+            head.append("🧠 Навык: " + esc(", ".join(s.name for s in skills)))
+        if ai_html:
+            body = ai_html
+        elif kind == "overview" and g is not None:
+            body = prose.overview(g)
+        elif kind == "compare":
+            body = prose.compare(found)
+        elif kind == "contract" and found:
+            body = prose.contract(found[0])
+        elif found:
+            body = prose.asset(found[0], g)
+        else:
+            body = ""
+        return "\n".join(head) + ("\n\n" if head and body else "") + body
 
     async def _verdict(
         self,
@@ -223,8 +263,11 @@ class Analyzer:
         g: Snapshot | None,
         skills: list[Skill],
         progress: Progress,
-    ) -> tuple[str, bool, list[swarm.AgentResult]]:
-        """Рой агентов (если включён) → итог главного аналитика → или вывод по правилам."""
+    ) -> tuple[str, bool, list[swarm.AgentResult], str | None]:
+        """Рой агентов (если включён) → итог главного аналитика → или вывод по правилам.
+
+        Возвращает: блок для подробного отчёта, был ли ИИ, агентов и HTML ответа ИИ (для подписи).
+        """
         blocks: list[str] = []
         agents: list[swarm.AgentResult] = []
         if self.swarm is not None and self.swarm.enabled:
@@ -261,11 +304,12 @@ class Analyzer:
                 title = "🤖 <b>Итог</b>" if answered else "🤖 <b>Вывод</b>"
                 if skills:
                     title += f" · навык: {esc(', '.join(s.name for s in skills))}"
-                blocks.append(f"{title}\n{to_html(text)}")
-                return "\n\n".join(blocks), True, agents
+                ai_html = to_html(text)
+                blocks.append(f"{title}\n{ai_html}")
+                return "\n\n".join(blocks), True, agents, ai_html
         if snaps:
             await progress.step("🧭", "Делаю вывод по правилам")
             bullets = "\n".join(f"• {esc(b)}" for b in report.rule_verdict(snaps, g))
             note = "\n<i>Навыки применяются в ИИ-выводе — подключи ключ ИИ.</i>" if skills else ""
             blocks.append(f"🧭 <b>Коротко</b>\n{bullets}{note}")
-        return "\n\n".join(blocks), bool(answered), agents
+        return "\n\n".join(blocks), bool(answered), agents, None

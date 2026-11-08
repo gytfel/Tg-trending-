@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     admin_ids: str = ""  # через запятую: безлимит и /sources с проверкой
     support_url: str = ""  # кнопка «💬 Поддержка» в помощи, например https://t.me/your_support
     rules_url: str = ""  # ссылка «Правила использования» в помощи
+    report_style: str = "card"  # card — картинка + живой текст; text — построчный отчёт
+    timezone: str = "UTC"  # время на карточках, например Europe/Kyiv
 
     # Хранилище
     database_path: str = "data/bot.sqlite3"

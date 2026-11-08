@@ -10,7 +10,7 @@ from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.base import BaseSession
 from aiogram.enums import ParseMode
-from aiogram.methods import AnswerCallbackQuery, EditMessageText, GetMe, SendMessage
+from aiogram.methods import AnswerCallbackQuery, DeleteMessage, EditMessageText, GetMe, SendMessage, SendPhoto
 from aiogram.types import CallbackQuery, Chat, Message, MessageEntity, Update, User
 
 from bot.ai import AIHub
@@ -49,6 +49,15 @@ class FakeSession(BaseSession):
                 text=method.text,
                 reply_markup=method.reply_markup,
             ).as_(bot)  # как настоящая сессия: ответ привязан к боту
+        if isinstance(method, SendPhoto):
+            chat_id = method.chat_id or UID
+            return Message(
+                message_id=next(_ids),
+                date=datetime.now(),
+                chat=Chat(id=chat_id, type="private" if chat_id > 0 else "supergroup"),
+                caption=method.caption,
+                reply_markup=method.reply_markup,
+            ).as_(bot)
         if isinstance(method, AnswerCallbackQuery):
             return True
         if isinstance(method, GetMe):
@@ -142,7 +151,24 @@ def api() -> FakeHttp:
         )
         .add("api.binance.com/api/v3/ticker/24hr", {"lastPrice": "100000", "openPrice": "99000", "quoteVolume": "1e9"})
         .add("api.alternative.me/fng/", {"data": [{"value": "50", "value_classification": "Neutral"}]})
+        .add("api.coingecko.com/api/v3/coins/markets", TOP_COINS)
+        .add("api.binance.com/api/v3/klines", [[i, "0", "0", "0", str(99000 + i * 10)] for i in range(168)])
     )
+
+
+TOP_COINS = [
+    {"symbol": s, "name": s, "current_price": p, "price_change_percentage_24h": c, "market_cap": m}
+    for s, p, c, m in [
+        ("btc", 100000, 1.0, 2e12),
+        ("eth", 3500, -0.5, 4e11),
+        ("usdt", 1, 0, 1.5e11),  # стейблкоин в карточку не попадёт
+        ("bnb", 900, 0.4, 1.3e11),
+        ("xrp", 2.1, -0.3, 1.2e11),
+        ("sol", 180, 2.2, 9e10),
+        ("doge", 0.2, -1.1, 3e10),
+        ("ada", 0.7, 0.2, 2.5e10),
+    ]
+]
 
 
 @pytest.fixture(scope="session")
@@ -151,13 +177,12 @@ def dispatcher():
     return build_dispatcher(None)  # type: ignore[arg-type]
 
 
-@pytest.fixture
-async def env(registry, dispatcher):
-    settings = Settings(bot_token="1:TEST", bot_name="Trending", database_path=":memory:", daily_limit=4)
+async def make_env(registry, dispatcher, **overrides):
+    settings = Settings(bot_token="1:TEST", bot_name="Trending", database_path=":memory:", daily_limit=4, **overrides)
     db = Database(":memory:")
     await db.connect()
     reg = Registry()
-    for sid in ("binance", "coingecko", "fear_greed"):
+    for sid in ("binance", "coingecko", "fear_greed", "coingecko_markets", "binance_klines"):
         reg.add(registry.get(sid))
     http = api()
     llm = LLM(AIHub({}), "claude-opus-5-5", "medium", "Trending")
@@ -180,8 +205,23 @@ async def env(registry, dispatcher):
     async def feed(update: Update):
         await dp.feed_update(bot, update, svc=svc)
 
+    return session, feed, svc
+
+
+@pytest.fixture
+async def env(registry, dispatcher):
+    """Построчный отчёт (REPORT_STYLE=text) — так проще проверять тексты сценариев."""
+    session, feed, svc = await make_env(registry, dispatcher, report_style="text")
     yield session, feed, svc
-    await db.close()
+    await svc.db.close()
+
+
+@pytest.fixture
+async def card_env(registry, dispatcher):
+    """Как в проде: картинка-карточка + живой текст."""
+    session, feed, svc = await make_env(registry, dispatcher, report_style="card")
+    yield session, feed, svc
+    await svc.db.close()
 
 
 async def test_start_shows_main_menu(env):
@@ -461,3 +501,49 @@ async def test_report_buttons_follow_their_report(env):
     await feed(cb("rp:sources", GROUP, message_id=999999))
     assert answers(session)[-1].show_alert
     assert len(sent_texts(session)) == before  # в группу ничего не ушло
+
+
+# --- ответ картинкой-карточкой ------------------------------------------------------------------
+
+
+async def test_card_report_in_private(card_env):
+    session, feed, svc = card_env
+    await feed(msg("разбери BTC"))
+    photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+    assert "<b>Bitcoin $100" in photo.caption and "за сутки" in photo.caption
+    labels = [b.text for row in photo.reply_markup.inline_keyboard for b in row]
+    assert "📋 Подробно" in labels and "🔔 Следить за BTC" in labels
+    thinking = [r for r in session.requests if isinstance(r, SendMessage)][-1]
+    assert thinking.text.startswith("✱ <b>Думаю")
+    assert any(isinstance(r, DeleteMessage) for r in session.requests)  # «Думаю…» убрали
+    assert (await svc.quota.status(UID)).used == 1
+
+    photo_msg_id = max(svc.reports)[1]
+    await feed(cb("rp:details", message_id=photo_msg_id))
+    assert "✱ <b>Bitcoin</b> · BTC · #1" in session.last().text  # построчный отчёт по кнопке
+
+
+async def test_card_market_overview(card_env):
+    session, feed, _ = card_env
+    await feed(msg("что сейчас на рынке?"))
+    photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+    assert photo.caption.startswith("По рынку:") and "BTC <b>$100" in photo.caption
+
+
+async def test_card_in_group_is_a_reply(card_env):
+    session, feed, _ = card_env
+    await feed(msg("@trending_test_bot BTC", GROUP))
+    photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+    assert photo.chat_id == GROUP.id and photo.reply_parameters is not None
+
+
+async def test_card_failure_falls_back_to_text(card_env, monkeypatch):
+    session, feed, _ = card_env
+
+    def broken(*args, **kwargs):
+        raise OSError("шрифт не найден")
+
+    monkeypatch.setattr("bot.handlers.analyze.render", broken)
+    await feed(msg("разбери BTC"))
+    assert not any(isinstance(r, SendPhoto) for r in session.requests)
+    assert "✱ <b>Bitcoin</b>" in session.last().text  # пришёл обычный построчный отчёт

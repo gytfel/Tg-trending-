@@ -211,7 +211,26 @@ class Security:
     holders: int | None = None
 
 
-Payload = Quote | Market | Derivatives | DexPair | NewsItem | Metric | Security
+@dataclass(slots=True)
+class CoinRow:
+    """Строка рейтинга монет (для карточки «Рынок · 24ч»)."""
+
+    symbol: str
+    name: str = ""
+    price: float | None = None
+    change_24h: float | None = None  # %
+    market_cap: float | None = None
+
+
+@dataclass(slots=True)
+class Series:
+    """История цены для графика: значения по порядку от старых к новым."""
+
+    points: list[float]
+    interval: str = "1h"
+
+
+Payload = Quote | Market | Derivatives | DexPair | NewsItem | Metric | Security | CoinRow | Series
 
 
 @dataclass(slots=True)
@@ -226,6 +245,8 @@ class SourceResult:
     news: list[NewsItem] = field(default_factory=list)
     metrics: list[Metric] = field(default_factory=list)
     security: Security | None = None
+    rows: list[CoinRow] = field(default_factory=list)
+    series: Series | None = None
     latency: float = 0.0
 
     def is_empty(self) -> bool:
@@ -237,6 +258,8 @@ class SourceResult:
             or self.news
             or self.metrics
             or self.security
+            or self.rows
+            or self.series
         )
 
 
@@ -346,6 +369,12 @@ def to_result(src: DataSource, payload: Any) -> SourceResult | None:
             res.metrics.append(item)
         elif isinstance(item, Security):
             res.security = item
+        elif isinstance(item, CoinRow):
+            if item.symbol:
+                res.rows.append(item)
+        elif isinstance(item, Series):
+            if len(item.points) >= 2:
+                res.series = item
         else:
             raise TypeError(f"{src.id}: неизвестный тип данных {type(item).__name__}")
     return None if res.is_empty() else res

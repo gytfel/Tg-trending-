@@ -2,20 +2,24 @@
 
 > Файл сгенерирован командой `python -m bot.sources.probe --catalog docs/SOURCES.md`.
 
-Всего: **226** · ✅ подключено без ключа: **130** · 🔑 подключено, нужен ключ: **12** · 🛠 в планах: **84**
+Всего: **233** · ✅ подключено без ключа: **137** · 🔑 подключено, нужен ключ: **12** · 🛠 в планах: **84**
 
 
-## 📊 Агрегаторы (22)
+## 📊 Агрегаторы (26)
 
 | id | Источник | Статус | Запросы | Примечание |
 |---|---|---|---|---|
 | `coingecko` | [CoinGecko](https://www.coingecko.com) | ✅ | тикер | ключ COINGECKO_API_KEY (demo) необязателен, но поднимает лимиты |
+| `coingecko_chart` | [CoinGecko Chart](https://www.coingecko.com) | ✅ | тикер |  |
 | `coingecko_global` | [CoinGecko Global](https://www.coingecko.com/en/global-charts) | ✅ | рынок |  |
+| `coingecko_markets` | [CoinGecko Top](https://www.coingecko.com) | ✅ | рынок |  |
 | `coingecko_trending` | [CoinGecko Trending](https://www.coingecko.com/en/highlights/trending-crypto) | ✅ | рынок |  |
 | `coinlore` | [CoinLore](https://www.coinlore.com) | ✅ | тикер |  |
 | `coinlore_global` | [CoinLore Global](https://www.coinlore.com) | ✅ | рынок |  |
+| `coinlore_top` | [CoinLore Top](https://www.coinlore.com) | ✅ | рынок |  |
 | `coinpaprika` | [CoinPaprika](https://coinpaprika.com) | ✅ | тикер |  |
 | `coinpaprika_global` | [CoinPaprika Global](https://coinpaprika.com) | ✅ | рынок |  |
+| `coinpaprika_top` | [CoinPaprika Top](https://coinpaprika.com) | ✅ | рынок |  |
 | `cryptocompare` | [CryptoCompare (CoinDesk Data)](https://www.cryptocompare.com) | ✅ | тикер | ключ CRYPTOCOMPARE_API_KEY необязателен |
 | `defillama_coins` | [DefiLlama Prices](https://defillama.com/docs/api) | ✅ | тикер/контракт |  |
 | `coincap` | [CoinCap](https://coincap.io) | 🔑 `COINCAP_API_KEY` | тикер |  |
@@ -32,12 +36,13 @@
 | `mobula` | [Mobula](https://mobula.io) | 🛠 в планах | — |  |
 | `tokenomist` | [Tokenomist (Token Unlocks)](https://tokenomist.ai) | 🛠 в планах | — | разлоки токенов |
 
-## 🏦 Биржи (спот) (38)
+## 🏦 Биржи (спот) (40)
 
 | id | Источник | Статус | Запросы | Примечание |
 |---|---|---|---|---|
 | `ascendex` | [AscendEX](https://ascendex.com) | ✅ | тикер |  |
 | `binance` | [Binance](https://www.binance.com) | ✅ | тикер |  |
+| `binance_klines` | [Binance — свечи](https://www.binance.com) | ✅ | тикер |  |
 | `binance_movers` | [Binance — лидеры роста](https://www.binance.com/en/markets) | ✅ | рынок |  |
 | `binance_us` | [Binance.US](https://www.binance.us) | ✅ | тикер |  |
 | `bingx` | [BingX](https://bingx.com) | ✅ | тикер |  |
@@ -48,6 +53,7 @@
 | `bitstamp` | [Bitstamp](https://www.bitstamp.net) | ✅ | тикер |  |
 | `btse` | [BTSE](https://www.btse.com) | ✅ | тикер |  |
 | `bybit` | [Bybit](https://www.bybit.com) | ✅ | тикер |  |
+| `bybit_klines` | [Bybit — свечи](https://www.bybit.com) | ✅ | тикер |  |
 | `coinbase` | [Coinbase](https://www.coinbase.com) | ✅ | тикер |  |
 | `coinex` | [CoinEx](https://www.coinex.com) | ✅ | тикер |  |
 | `cryptocom` | [Crypto.com Exchange](https://crypto.com/exchange) | ✅ | тикер |  |
@@ -111,13 +117,14 @@
 | `laevitas` | [Laevitas](https://www.laevitas.ch) | 🛠 в планах | — | опционы |
 | `velo` | [Velo Data](https://velo.xyz) | 🛠 в планах | — |  |
 
-## 🦄 DEX (16)
+## 🦄 DEX (17)
 
 | id | Источник | Статус | Запросы | Примечание |
 |---|---|---|---|---|
 | `dexscreener` | [DexScreener](https://dexscreener.com) | ✅ | тикер/контракт |  |
 | `dexscreener_boosts` | [DexScreener Boosts](https://dexscreener.com) | ✅ | рынок |  |
 | `geckoterminal` | [GeckoTerminal](https://www.geckoterminal.com) | ✅ | тикер/контракт |  |
+| `geckoterminal_chart` | [GeckoTerminal — график пула](https://www.geckoterminal.com) | ✅ | контракт |  |
 | `geckoterminal_trending` | [GeckoTerminal Trending](https://www.geckoterminal.com) | ✅ | рынок |  |
 | `jupiter` | [Jupiter Price](https://jup.ag) | ✅ | контракт |  |
 | `birdeye` | [Birdeye](https://birdeye.so) | 🔑 `BIRDEYE_API_KEY` | контракт |  |

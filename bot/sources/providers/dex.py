@@ -12,6 +12,7 @@ from bot.sources.base import (
     Metric,
     NoData,
     Scope,
+    Series,
     first,
     need,
     num,
@@ -176,6 +177,33 @@ async def birdeye(ctx: Ctx):
     if t.get("holder"):
         out.append(Metric(key="holders", label="Держателей", value=int(t["holder"])))
     return out
+
+
+@source(
+    "geckoterminal_chart",
+    "GeckoTerminal — график пула",
+    category=Category.DEX,
+    scope=Scope.CONTRACT,
+    homepage="https://www.geckoterminal.com",
+    when=lambda a: (a.chain or "") in GECKOTERMINAL_NETWORKS,
+)
+async def geckoterminal_chart(ctx: Ctx):
+    a = ctx.asset
+    d = await ctx.http.get_json(f"https://api.dexscreener.com/latest/dex/tokens/{a.contract}", ttl=60)
+    pairs = [p for p in d.get("pairs") or [] if _same((p.get("baseToken") or {}).get("address"), a.contract)]
+    pair = max(pairs, key=lambda p: (p.get("liquidity") or {}).get("usd") or 0) if pairs else None
+    if not pair or not pair.get("pairAddress"):
+        raise NoData("нет пула")
+    net = GECKOTERMINAL_NETWORKS[pair.get("chainId") or a.chain]
+    o = await ctx.http.get_json(
+        f"https://api.geckoterminal.com/api/v2/networks/{net}/pools/{pair['pairAddress']}/ohlcv/hour",
+        {"aggregate": 1, "limit": 168},
+        headers=GT_HEADERS,
+        ttl=600,
+    )
+    rows = (((o.get("data") or {}).get("attributes") or {}).get("ohlcv_list")) or []
+    closes = [num(r[4]) for r in reversed(rows) if len(r) > 4]  # от новых к старым → разворачиваем
+    return Series(points=[c for c in closes if c], interval="1h")
 
 
 # --- тренды DEX (общий фон) ---------------------------------------------------------

@@ -121,14 +121,17 @@ def watch_triggered(symbol: str) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def report(symbol: str | None) -> InlineKeyboardMarkup:
+def report(symbol: str | None, details: bool = False) -> InlineKeyboardMarkup:
+    """details=True — под карточкой: построчный отчёт открывается кнопкой «📋 Подробно»."""
     b = InlineKeyboardBuilder()
     if symbol:
         b.button(text=f"🔔 Следить за {symbol}", callback_data=WatchCb(action="new", symbol=symbol))
     b.button(text="🔄 Обновить", callback_data=ReportCb(action="refresh"))
+    if details:
+        b.button(text="📋 Подробно", callback_data=ReportCb(action="details"))
     b.button(text="📊 Источники", callback_data=ReportCb(action="sources"))
     b.button(text="✱ Меню", callback_data=Nav(to="menu"))
-    b.adjust(*(([1] if symbol else []) + [2, 1]))
+    b.adjust(*(([1] if symbol else []) + ([2, 2] if details else [2, 1])))
     return b.as_markup()
 
 

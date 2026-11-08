@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from bot.sources.base import Category, Ctx, Market, Metric, NoData, Scope, first, need, num
+from bot.sources.base import Category, CoinRow, Ctx, Market, Metric, NoData, Scope, Series, first, need, num
 from bot.sources.chains import DEFILLAMA_CHAINS
 from bot.sources.registry import planned, source
 from bot.sources.resolver import coinpaprika_lookup
@@ -370,6 +370,86 @@ async def coingecko_trending(ctx: Ctx):
     if not syms:
         raise NoData("нет трендов")
     return Metric(key="cg_trending", label="В трендах CoinGecko", value=" · ".join(syms[:7]))
+
+
+# --- топ монет для карточки «Рынок · 24ч» -------------------------------------------
+
+
+@source("coingecko_markets", "CoinGecko Top", homepage="https://www.coingecko.com", **GLOBAL)
+async def coingecko_markets(ctx: Ctx):
+    rows = await ctx.http.get_json(
+        f"{CG}/coins/markets",
+        {"vs_currency": "usd", "order": "market_cap_desc", "per_page": 40, "page": 1},
+        headers=cg_headers(),
+        ttl=180,
+    )
+    return [
+        CoinRow(
+            symbol=str(r.get("symbol", "")).upper(),
+            name=r.get("name") or "",
+            price=num(r.get("current_price")),
+            change_24h=num(r.get("price_change_percentage_24h")),
+            market_cap=num(r.get("market_cap")),
+        )
+        for r in rows
+    ]
+
+
+@source("coinpaprika_top", "CoinPaprika Top", homepage="https://coinpaprika.com", **GLOBAL)
+async def coinpaprika_top(ctx: Ctx):
+    async def build() -> list[dict]:
+        rows = await ctx.http.get_json("https://api.coinpaprika.com/v1/tickers", ttl=0)
+        rows = [r for r in rows if r.get("rank")]
+        rows.sort(key=lambda r: r["rank"])
+        return rows[:40]
+
+    rows = await ctx.http.memo("coinpaprika:top", 300, build)
+    out = []
+    for r in rows:
+        usd = (r.get("quotes") or {}).get("USD") or {}
+        out.append(
+            CoinRow(
+                symbol=str(r.get("symbol", "")).upper(),
+                name=r.get("name") or "",
+                price=num(usd.get("price")),
+                change_24h=num(usd.get("percent_change_24h")),
+                market_cap=num(usd.get("market_cap")),
+            )
+        )
+    return out
+
+
+@source("coinlore_top", "CoinLore Top", homepage="https://www.coinlore.com", **GLOBAL)
+async def coinlore_top(ctx: Ctx):
+    d = await ctx.http.get_json("https://api.coinlore.net/api/tickers/", {"start": 0, "limit": 40}, ttl=300)
+    return [
+        CoinRow(
+            symbol=str(r.get("symbol", "")).upper(),
+            name=r.get("name") or "",
+            price=num(r.get("price_usd")),
+            change_24h=num(r.get("percent_change_24h")),
+            market_cap=num(r.get("market_cap_usd")),
+        )
+        for r in d.get("data") or []
+    ]
+
+
+@source(
+    "coingecko_chart",
+    "CoinGecko Chart",
+    homepage="https://www.coingecko.com",
+    when=lambda a: bool(a.coingecko_id),
+    **AGG,
+)
+async def coingecko_chart(ctx: Ctx):
+    d = await ctx.http.get_json(
+        f"{CG}/coins/{ctx.asset.coingecko_id}/market_chart",
+        {"vs_currency": "usd", "days": 7},
+        headers=cg_headers(),
+        ttl=900,
+    )
+    points = [num(p[1]) for p in d.get("prices") or [] if len(p) > 1]
+    return Series(points=[p for p in points if p], interval="1h")
 
 
 # --- в каталоге, ещё не подключены ---------------------------------------------

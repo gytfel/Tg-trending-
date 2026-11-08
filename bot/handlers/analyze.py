@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardMarkup, Message
 from aiogram.utils.chat_action import ChatActionSender
 
 from bot import keyboards, texts
@@ -19,7 +22,9 @@ from bot.formatting import esc, split_message
 from bot.handlers.common import safe_edit, show
 from bot.handlers.thinking import ThinkingMessage
 from bot.query_parser import parse_query
+from bot.render import Brand, render
 from bot.services import Services, report
+from bot.services.prose import CAPTION_LIMIT, visible_len
 
 log = logging.getLogger(__name__)
 router = Router(name="analyze")
@@ -65,6 +70,18 @@ async def refresh(cb: CallbackQuery, svc: Services) -> None:
     await cb.answer("Обновляю…")
     in_group = cb.message.chat.type != ChatType.PRIVATE
     await run_analysis(cb.message, cb.from_user.id, last.text, svc, reply=in_group)
+
+
+@router.callback_query(ReportCb.filter(F.action == "details"))
+async def report_details(cb: CallbackQuery, svc: Services) -> None:
+    """«📋 Подробно» под карточкой — построчный отчёт со всеми цифрами, роем и новостями."""
+    last = report_of(cb, svc)
+    if last is None or not isinstance(cb.message, Message):
+        await cb.answer(texts.NO_LAST, show_alert=True)
+        return
+    await cb.answer()
+    for part in split_message(last.result.text):
+        await cb.message.answer(part)
 
 
 @router.callback_query(ReportCb.filter(F.action == "sources"))
@@ -179,10 +196,53 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
     svc.remember(user_id, text, result)
 
     watch_symbol = result.symbols[0] if result.kind == "asset" and result.symbols else None
-    kb = keyboards.report(watch_symbol)
-    parts = split_message(result.text)
+    sent = None
+    if svc.settings.report_style.strip().lower() == "card" and result.card is not None:
+        sent = await _send_card(chat_msg, progress, result, keyboards.report(watch_symbol, details=True), svc, reply)
+    if sent is None:  # текстовый отчёт: по настройке или если картинка не получилась
+        sent = await _send_text(chat_msg, progress, result.text, keyboards.report(watch_symbol))
+    svc.remember_report(sent.chat.id, sent.message_id, text, result)
+
+
+async def _send_text(chat_msg: Message, progress: Message, text: str, kb: InlineKeyboardMarkup) -> Message:
+    """Построчный отчёт: первая часть заменяет «Думаю…», кнопки — на последней части."""
+    parts = split_message(text)
+    sent = progress
     for i, part in enumerate(parts):
         last = i == len(parts) - 1
         sent = await _send(progress if i == 0 else chat_msg, part, kb if last else None, edit=i == 0)
-        if last:  # кнопки висят на последней части отчёта
-            svc.remember_report(sent.chat.id, sent.message_id, text, result)
+    return sent
+
+
+async def _send_card(
+    chat_msg: Message, progress: Message, result, kb: InlineKeyboardMarkup, svc: Services, reply: bool
+) -> Message | None:
+    """Картинка с цифрами + живой текст подписью (как сообщение аналитика). None — не получилось."""
+    try:
+        me = await chat_msg.bot.me()
+        brand = Brand(svc.settings.bot_name, me.username, now_in(svc.settings.timezone))
+        png = await asyncio.to_thread(render, result.card, brand)
+        photo = BufferedInputFile(png, filename="trending.png")
+        send_photo = chat_msg.reply_photo if reply else chat_msg.answer_photo
+        caption = result.caption
+        if caption and visible_len(caption) <= CAPTION_LIMIT:
+            sent = await send_photo(photo, caption=caption, reply_markup=kb)
+        else:  # длинный текст — отдельным сообщением под картинкой
+            await send_photo(photo)
+            sent = await _send_text(chat_msg, progress, caption or result.text, kb)
+            return sent
+    except Exception:  # noqa: BLE001 — картинка не должна ломать ответ
+        log.exception("card report failed, falling back to text")
+        return None
+    try:
+        await progress.delete()  # «Думаю…» больше не нужно — ответ пришёл картинкой
+    except TelegramBadRequest:
+        pass
+    return sent
+
+
+def now_in(tz_name: str) -> datetime:
+    try:
+        return datetime.now(ZoneInfo(tz_name))
+    except (ZoneInfoNotFoundError, ValueError):
+        return datetime.now(UTC)
