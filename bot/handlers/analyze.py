@@ -23,6 +23,7 @@ from bot.callbacks import Ask, Nav, ReportCb
 from bot.formatting import esc, split_message
 from bot.handlers import streaming
 from bot.handlers.common import safe_edit, show
+from bot.handlers.live import LiveAnswer
 from bot.handlers.thinking import ThinkingMessage
 from bot.query_parser import parse_query
 from bot.render import Brand, render
@@ -173,9 +174,20 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
         in_group = chat_msg.chat.type != ChatType.PRIVATE
         # в группах у Telegram лимит ~20 сообщений в минуту — обновляем «Думаю…» реже
         thinking = await ThinkingMessage.start(chat_msg, reply=reply, interval=3.0 if in_group else 1.5)
+        live = None
+        if svc.llm.enabled and svc.settings.stream_answers:
+            # ответ ИИ пойдёт в чат прямо по мере генерации
+            live = LiveAnswer(
+                chat_msg,
+                thinking,
+                card_style=svc.settings.report_style.strip().lower() == "card",
+                brand=lambda: _brand(chat_msg, svc),
+                reply=reply,
+                interval=max(svc.settings.stream_interval, 2.5) if in_group else svc.settings.stream_interval,
+            )
         try:
             async with ChatActionSender.typing(bot=chat_msg.bot, chat_id=chat_msg.chat.id):
-                result = await svc.analyzer.analyze(parsed, used_skills, thinking)
+                result = await svc.analyzer.analyze(parsed, used_skills, thinking, live=live)
         finally:
             await thinking.close()
     except Exception:  # noqa: BLE001
@@ -209,7 +221,11 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
     )
     async with ChatActionSender.typing(bot=chat_msg.bot, chat_id=chat_msg.chat.id):  # «печатает…» до конца
         sent = None
-        if svc.settings.report_style.strip().lower() == "card" and result.card is not None:
+        if live is not None and live.started:
+            # ответ ИИ уже идёт в чат — дописываем целиком и вешаем кнопки
+            details = live.mode == "caption"
+            sent = await live.finish(result.caption, result.text, keyboards.report(watch_symbol, details=details))
+        elif svc.settings.report_style.strip().lower() == "card" and result.card is not None:
             kb = keyboards.report(watch_symbol, details=True)
             sent = await _send_card(chat_msg, progress, result, kb, svc, reply, pace)
         if sent is None:  # текстовый отчёт: по настройке или если картинка не получилась
@@ -275,9 +291,7 @@ async def _send_card(
     fits = bool(caption) and visible_len(caption) <= CAPTION_LIMIT
     fr = streaming.frames(caption, pace.group) if pace.stream and fits else []
     try:
-        me = await chat_msg.bot.me()
-        brand = Brand(svc.settings.bot_name, me.username, now_in(svc.settings.timezone))
-        png = await asyncio.to_thread(render, result.card, brand)
+        png = await asyncio.to_thread(render, result.card, await _brand(chat_msg, svc))
         photo = BufferedInputFile(png, filename="trending.png")
         send_photo = chat_msg.reply_photo if reply else chat_msg.answer_photo
         if fits:
@@ -306,6 +320,11 @@ async def _send_card(
             with contextlib.suppress(TelegramBadRequest):
                 await sent.edit_caption(caption=caption, reply_markup=kb)
     return sent
+
+
+async def _brand(chat_msg: Message, svc: Services) -> Brand:
+    me = await chat_msg.bot.me()
+    return Brand(svc.settings.bot_name, me.username, now_in(svc.settings.timezone))
 
 
 def now_in(tz_name: str) -> datetime:

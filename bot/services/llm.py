@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from bot.ai import AIError, AIHub, ModelRef
@@ -16,6 +17,8 @@ from bot.db import Skill
 from bot.formatting import esc
 
 log = logging.getLogger(__name__)
+
+OnText = Callable[[str], Awaitable[None]]
 
 SYSTEM_PROMPT = """Ты — {bot_name}, ИИ-аналитик крипторынка в Telegram-боте.
 
@@ -89,18 +92,24 @@ class LLM:
         context: dict[str, Any],
         skills: list[Skill],
         agents: list[dict[str, Any]] | None = None,
+        on_text: OnText | None = None,
     ) -> str | None:
+        """Итоговый ответ. С on_text — потоком: on_text(весь текст на данный момент) по мере генерации."""
         if not self.enabled:
             return None
         system = SYSTEM_PROMPT.format(bot_name=self.bot_name) + (SWARM_ADDON if agents else "")
+        prompt = self.build_prompt(question, context, skills, agents)
         try:
-            return await self.hub.complete(
-                self.ref,
-                system,
-                self.build_prompt(question, context, skills, agents),
-                max_tokens=16000,
-                effort=self.effort,
-            )
+            if on_text is None:
+                return await self.hub.complete(self.ref, system, prompt, max_tokens=16000, effort=self.effort)
+            text = ""
+            async for piece in self.hub.stream(self.ref, system, prompt, max_tokens=16000, effort=self.effort):
+                text += piece
+                try:
+                    await on_text(text)
+                except Exception:  # noqa: BLE001 — показ в Telegram не должен обрывать ответ модели
+                    log.debug("on_text failed", exc_info=True)
+            return text.strip() or None
         except AIError as e:
             log.warning("главный аналитик (%s) не ответил: %s", self.ref, e)
             return None

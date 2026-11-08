@@ -13,9 +13,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -98,6 +99,12 @@ class Provider(ABC):
         schema: dict[str, Any] | None = None,
     ) -> str: ...
 
+    async def stream(
+        self, model: str, system: str, prompt: str, *, max_tokens: int, effort: str | None = None
+    ) -> AsyncIterator[str]:
+        """Текст по кусочкам по мере генерации. По умолчанию — один кусок целиком."""
+        yield await self.complete(model, system, prompt, max_tokens=max_tokens, effort=effort)
+
     async def close(self) -> None:  # noqa: B027 — по умолчанию закрывать нечего
         pass
 
@@ -111,7 +118,8 @@ class AnthropicProvider(Provider):
     async def close(self) -> None:
         await self._client.close()
 
-    async def complete(self, model, system, prompt, *, max_tokens, effort=None, schema=None) -> str:
+    @staticmethod
+    def _params(model, system, prompt, max_tokens, effort, schema) -> dict[str, Any]:
         params: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
@@ -125,32 +133,60 @@ class AnthropicProvider(Provider):
             output_config["format"] = {"type": "json_schema", "schema": schema}
         if output_config:
             params["output_config"] = output_config
+        return params
+
+    @staticmethod
+    def _error(model: str, e: Exception) -> AIError:
+        """Ошибки SDK -> короткий AIError (от частных к общим: 401 → 400 → 429 → прочие → сеть)."""
+        if isinstance(e, anthropic.AuthenticationError):
+            log.error("Claude: неверный ANTHROPIC_API_KEY")
+            return AIError("неверный ключ")
+        if isinstance(e, anthropic.BadRequestError):
+            log.error("Claude %s: некорректный запрос: %s", model, e.message)
+            return AIError("некорректный запрос")
+        if isinstance(e, anthropic.RateLimitError):
+            log.warning("Claude %s: rate limit", model)
+            return AIError("лимит запросов")
+        if isinstance(e, anthropic.APIStatusError):
+            log.warning("Claude %s: ошибка API %s: %s", model, e.status_code, e.message)
+            return AIError(f"ошибка API {e.status_code}")
+        log.warning("Claude %s: нет соединения: %r", model, e)
+        return AIError("нет соединения")
+
+    async def complete(self, model, system, prompt, *, max_tokens, effort=None, schema=None) -> str:
+        params = self._params(model, system, prompt, max_tokens, effort, schema)
         try:
             if model in FALLBACK_MODELS:
                 resp = await self._client.beta.messages.create(**params, betas=[FALLBACK_BETA], fallbacks="default")
             else:
                 resp = await self._client.messages.create(**params)
-        except anthropic.AuthenticationError as e:
-            log.error("Claude: неверный ANTHROPIC_API_KEY")
-            raise AIError("неверный ключ") from e
-        except anthropic.BadRequestError as e:
-            log.error("Claude %s: некорректный запрос: %s", model, e.message)
-            raise AIError("некорректный запрос") from e
-        except anthropic.RateLimitError as e:
-            log.warning("Claude %s: rate limit", model)
-            raise AIError("лимит запросов") from e
-        except anthropic.APIStatusError as e:
-            log.warning("Claude %s: ошибка API %s: %s", model, e.status_code, e.message)
-            raise AIError(f"ошибка API {e.status_code}") from e
-        except anthropic.APIConnectionError as e:
-            log.warning("Claude %s: нет соединения: %r", model, e)
-            raise AIError("нет соединения") from e
+        except (anthropic.APIStatusError, anthropic.APIConnectionError) as e:
+            raise self._error(model, e) from e
         if resp.stop_reason == "refusal":
             raise Refused("модель отказалась")
         text = "".join(b.text for b in resp.content if b.type == "text").strip()
         if not text:
             raise AIError("пустой ответ")
         return text
+
+    async def stream(self, model, system, prompt, *, max_tokens, effort=None) -> AsyncIterator[str]:
+        """Текст по мере генерации. Отказ на середине подхватывает запасная модель (fallbacks) —
+        уже показанный текст при этом не отменяется; если отказалась вся цепочка — Refused."""
+        params = self._params(model, system, prompt, max_tokens, effort, None)
+        try:
+            if model in FALLBACK_MODELS:
+                manager = self._client.beta.messages.stream(**params, betas=[FALLBACK_BETA], fallbacks="default")
+            else:
+                manager = self._client.messages.stream(**params)
+            async with manager as stream:
+                async for text in stream.text_stream:
+                    if text:
+                        yield text
+                final = await stream.get_final_message()
+        except (anthropic.APIStatusError, anthropic.APIConnectionError) as e:
+            raise self._error(model, e) from e
+        if final.stop_reason == "refusal":
+            raise Refused("модель отказалась")
 
 
 class OpenAICompatProvider(Provider):
@@ -204,6 +240,50 @@ class OpenAICompatProvider(Provider):
         if not content or not str(content).strip():
             raise AIError("пустой ответ")
         return str(content).strip()
+
+    async def stream(self, model, system, prompt, *, max_tokens, effort=None) -> AsyncIterator[str]:
+        body: dict[str, Any] = {
+            "model": model,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+            MAX_TOKENS_PARAM.get(self.name, "max_tokens"): max_tokens,
+            "stream": True,
+        }
+        headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        if self.name == "openrouter" and self.app_name:
+            headers["X-Title"] = self.app_name
+        session = await self._get_session()
+        try:
+            async with session.post(f"{self.base_url}/chat/completions", json=body, headers=headers) as resp:
+                if resp.status >= 400:
+                    detail = (await resp.text(errors="replace"))[:300]
+                    log.warning("%s %s: HTTP %s %s", self.name, model, resp.status, detail)
+                    raise AIError(f"HTTP {resp.status}")
+                async for line in resp.content:
+                    if piece := _SSE.delta(line):
+                        yield piece
+        except (aiohttp.ClientError, TimeoutError) as e:
+            log.warning("%s %s: поток прервался: %r", self.name, model, e)
+            raise AIError("нет соединения") from e
+
+
+class _SSE:
+    """Разбор потока Chat Completions: строки `data: {...}`, конец — `data: [DONE]`."""
+
+    @staticmethod
+    def delta(line: bytes) -> str | None:
+        text = line.decode("utf-8", "replace").strip()
+        if not text.startswith("data:"):
+            return None
+        data = text[5:].strip()
+        if not data or data == "[DONE]":
+            return None
+        try:
+            obj = json.loads(data)
+            return (obj["choices"][0].get("delta") or {}).get("content") or None
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError, AttributeError):
+            return None
 
 
 class AIHub:
@@ -262,6 +342,12 @@ class AIHub:
         return await self.provider(ref).complete(
             ref.model, system, prompt, max_tokens=max_tokens, effort=effort, schema=schema
         )
+
+    async def stream(
+        self, ref: ModelRef, system: str, prompt: str, *, max_tokens: int = 16000, effort: str | None = None
+    ) -> AsyncIterator[str]:
+        async for piece in self.provider(ref).stream(ref.model, system, prompt, max_tokens=max_tokens, effort=effort):
+            yield piece
 
     async def close(self) -> None:
         for p in self._providers.values():

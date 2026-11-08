@@ -170,7 +170,7 @@ class StubLLM:
     def __init__(self):
         self.seen = None
 
-    async def verdict(self, question, context, skills, agents=None):
+    async def verdict(self, question, context, skills, agents=None, on_text=None):
         self.seen = (question, context, skills)
         return "**Импульс** сильный <script>\n• держим"
 

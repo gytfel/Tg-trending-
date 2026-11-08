@@ -210,3 +210,119 @@ async def test_lead_error_returns_none():
 
 def test_to_html():
     assert to_html("## Итог\n**рост** <b>") == "Итог\n<b>рост</b> &lt;b&gt;"
+
+
+# --- поток: текст по мере генерации --------------------------------------------------------------
+
+
+class FakeStream:
+    def __init__(self, pieces, stop="end_turn"):
+        self.pieces, self.stop = pieces, stop
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    @property
+    def text_stream(self):
+        async def gen():
+            for p in self.pieces:
+                yield p
+
+        return gen()
+
+    async def get_final_message(self):
+        return SimpleNamespace(stop_reason=self.stop)
+
+
+class FakeStreamMessages:
+    def __init__(self, pieces, stop="end_turn"):
+        self.pieces, self.stop, self.kwargs = pieces, stop, None
+
+    def stream(self, **kwargs):
+        self.kwargs = kwargs
+        return FakeStream(self.pieces, self.stop)
+
+
+def stub_stream(pieces, stop="end_turn"):
+    prov = AnthropicProvider("sk-test", timeout=5)
+    beta, plain = FakeStreamMessages(pieces, stop), FakeStreamMessages(pieces, stop)
+    prov._client = SimpleNamespace(beta=SimpleNamespace(messages=beta), messages=plain)
+    return prov, beta, plain
+
+
+async def test_anthropic_stream_with_fallbacks():
+    prov, beta, plain = stub_stream(["При", "вет", ""])
+    out = [p async for p in prov.stream("claude-opus-5-5", "s", "p", max_tokens=100, effort="medium")]
+    assert out == ["При", "вет"]
+    assert beta.kwargs["fallbacks"] == "default" and beta.kwargs["betas"] == [FALLBACK_BETA]
+    assert beta.kwargs["output_config"] == {"effort": "medium"} and plain.kwargs is None
+
+
+async def test_anthropic_stream_refusal_after_partial():
+    prov, *_ = stub_stream(["частичный"], stop="refusal")
+    seen = []
+    with pytest.raises(Refused):
+        async for p in prov.stream("claude-haiku-5-5", "s", "p", max_tokens=100):
+            seen.append(p)
+    assert seen == ["частичный"]
+
+
+async def test_openai_compat_sse_stream():
+    async def handler(request: web.Request):
+        body = await request.json()
+        assert body["stream"] is True
+        resp = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        for chunk in ['{"choices":[{"delta":{"role":"assistant"}}]}', '{"choices":[{"delta":{"content":"Пр"}}]}',
+                      "не json", '{"choices":[{"delta":{"content":"ивет"}}]}', "[DONE]"]:  # fmt: skip
+            await resp.write(f"data: {chunk}\n\n".encode())
+        await resp.write_eof()
+        return resp
+
+    app = web.Application()
+    app.router.add_post("/v1/chat/completions", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+    prov = OpenAICompatProvider("deepseek", f"http://127.0.0.1:{port}/v1", "k", timeout=5)
+    try:
+        assert [p async for p in prov.stream("m", "s", "q", max_tokens=50)] == ["Пр", "ивет"]
+    finally:
+        await prov.close()
+        await runner.cleanup()
+
+
+class StreamHub(AIHub):
+    def __init__(self, pieces, error=None):
+        super().__init__({"ANTHROPIC_API_KEY": "k"})
+        self.pieces, self.error = pieces, error
+
+    async def stream(self, ref, system, prompt, **kw):
+        for p in self.pieces:
+            yield p
+        if self.error:
+            raise self.error
+
+
+async def test_lead_streams_growing_text():
+    seen: list[str] = []
+
+    async def on_text(acc):
+        seen.append(acc)
+
+    llm = LLM(StreamHub(["Рынок ", "спокоен", "."]), "claude-opus-5-5", "medium", "T")
+    assert await llm.verdict("q", {}, [], on_text=on_text) == "Рынок спокоен."
+    assert seen == ["Рынок ", "Рынок спокоен", "Рынок спокоен."]
+
+
+async def test_lead_stream_error_midway_returns_none():
+    async def on_text(acc):
+        raise RuntimeError("Telegram упал")  # сбой показа не обрывает генерацию
+
+    llm = LLM(StreamHub(["часть"], error=AIError("нет соединения")), "claude-opus-5-5", "medium", "T")
+    assert await llm.verdict("q", {}, [], on_text=on_text) is None

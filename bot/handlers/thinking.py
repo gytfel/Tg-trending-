@@ -1,7 +1,7 @@
 """«✱ Думаю…» — живое сообщение с ходом обработки запроса.
 
-Три строки, как у ИИ-чатов: «Думаю…» с бегущими точками, текущее действие
-курсивом («📰 Читаю новости · 34 из 131») и таймер «⏱ 8 с». Правки сообщения прореживаются (не чаще раза в
+Как у ИИ-чатов: «Думаю…» с бегущими точками и таймер «⏱ 8 с». Шаги работы
+(Progress) по-прежнему записываются, но в чате не показываются. Правки сообщения прореживаются (не чаще раза в
 секунду), чтобы не упираться в лимиты Telegram. Когда разбор готов,
 сообщение заменяется отчётом.
 """
@@ -17,12 +17,9 @@ from collections.abc import Callable
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.types import Message
 
-from bot.formatting import esc
 from bot.services.progress import Progress
 
 log = logging.getLogger(__name__)
-
-MAX_STEP_LEN = 70
 
 
 class ThinkingMessage(Progress):
@@ -61,17 +58,10 @@ class ThinkingMessage(Progress):
     # -- отрисовка ---------------------------------------------------------------------
 
     def render(self) -> str:
-        """Как у ИИ-чатов: «Думаю…», одно текущее действие и таймер."""
+        """Как у ИИ-чатов: «Думаю…» с бегущими точками и таймер."""
         dots = "." * (self._frame % 3 + 1)
         seconds = int(self.clock() - self._t0)
-        lines = [f"✱ <b>Думаю{dots}</b>"]
-        if cur := self.current():
-            icon, line = cur
-            if len(line) > MAX_STEP_LEN:
-                line = line[: MAX_STEP_LEN - 1].rstrip() + "…"
-            lines.append(f"{esc(icon)} <i>{esc(line)}</i>")
-        lines.append(f"⏱ {seconds} с")
-        return "\n".join(lines)
+        return f"✱ <b>Думаю{dots}</b>\n⏱ {seconds} с"
 
     # -- отправка -------------------------------------------------------------------------
 

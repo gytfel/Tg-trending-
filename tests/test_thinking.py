@@ -1,11 +1,11 @@
-"""«✱ Думаю…»: текущее действие, таймер, живой счётчик, прореживание правок, остановка."""
+"""«✱ Думаю…»: таймер, прореживание правок, остановка; шаги пишутся, но в чат не попадают."""
 
 import asyncio
 
 from aiogram.exceptions import TelegramRetryAfter
 from aiogram.methods import EditMessageText
 
-from bot.handlers.thinking import MAX_STEP_LEN, ThinkingMessage
+from bot.handlers.thinking import ThinkingMessage
 from bot.services.progress import Progress
 from tests.test_html import assert_tg_html
 
@@ -50,45 +50,32 @@ async def test_render_like_ai_chat():
     clock = FakeClock()
     t = ThinkingMessage(FakeMessage(), clock=clock)
     assert t.render() == "✱ <b>Думаю.</b>\n⏱ 0 с"
-    await t.step("🔎", "Ищу <BTC> & ETH")
     clock.t += 12
     t._frame = 2
     text = t.render()
-    assert text == "✱ <b>Думаю...</b>\n🔎 <i>Ищу &lt;BTC&gt; &amp; ETH</i>\n⏱ 12 с"
+    assert text == "✱ <b>Думаю...</b>\n⏱ 12 с"
     assert_tg_html(text)
 
 
-async def test_only_current_step_is_shown_and_trimmed():
+async def test_steps_are_recorded_but_not_shown():
     t = ThinkingMessage(FakeMessage(), clock=FakeClock())
     await t.step("📰", "Читаю новости")
-    await t.step("💱", "Сверяю цены на биржах " + "x" * 200)
-    lines = t.render().split("\n")
-    assert len(lines) == 3 and "Читаю новости" not in t.render()
-    assert lines[1].startswith("💱 <i>Сверяю цены") and len(lines[1]) < MAX_STEP_LEN + 20
+    await t.step(lambda: "💱", lambda: "Сверяю цены на биржах")
+    assert "Читаю новости" not in t.render() and "Сверяю" not in t.render()
+    assert t.current() == ("💱", "Сверяю цены на биржах")
+    assert t.lines() == ["📰 Читаю новости", "💱 Сверяю цены на биржах"]
 
 
-async def test_live_icon_and_text():
-    state = {"icon": "📰", "n": 3}
-    t = ThinkingMessage(FakeMessage(), clock=FakeClock())
-    await t.step(lambda: state["icon"], lambda: f"Читаю · {state['n']} из 10")
-    state.update(icon="💱", n=7)
-    assert "💱 <i>Читаю · 7 из 10</i>" in t.render()
-
-
-async def test_edits_are_throttled_and_live_counter_updates():
+async def test_edits_only_when_timer_changes():
     clock, msg = FakeClock(), FakeMessage()
     t = ThinkingMessage(msg, clock=clock, min_gap=1.0)
-    await t.step("🧩", "Понял задачу")  # первая правка — сразу
-    await t.step("🔎", "Ищу BTC")  # слишком рано — ждёт тика
-    assert len(msg.edits) == 1 and "Понял задачу" in msg.edits[0]
-    done = [5]
+    await t._flush(force=True)
+    await t.step("🧩", "Понял задачу")  # шаг не меняет сообщение — правки нет
+    assert len(msg.edits) == 1
     clock.t += 1.1
-    await t.step("🔧", lambda: f"Работаю с данными: {done[0]} из 100")
-    assert "5 из 100" in msg.edits[-1]
-    done[0] = 80
-    clock.t += 0.2
-    await t._flush(force=True)  # так делает тикер анимации
-    assert "80 из 100" in msg.edits[-1]
+    t._frame += 1
+    await t._flush(force=True)  # так делает тикер: точки и секунды
+    assert len(msg.edits) == 2 and msg.edits[-1] == "✱ <b>Думаю..</b>\n⏱ 1 с"
 
 
 async def test_flood_control_pauses_edits():

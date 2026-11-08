@@ -7,6 +7,7 @@ import logging
 import time
 from collections import Counter
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from bot.db import Skill
 from bot.formatting import esc, short_addr
@@ -23,6 +24,17 @@ from bot.sources.registry import Registry
 from bot.sources.resolver import resolve_contract, resolve_symbol
 
 log = logging.getLogger(__name__)
+
+
+class LiveSink(Protocol):
+    """Куда показывать ответ ИИ по мере генерации (реализация для Telegram — handlers/live.py)."""
+
+    started: bool
+
+    async def begin(self, card: Card | None, caption_head: str, text_prefix: str) -> None: ...
+
+    async def update(self, body_html: str) -> None: ...
+
 
 # короткие названия категорий для строки «Собрал данные: …»
 CAT_SHORT = {
@@ -163,7 +175,14 @@ class Analyzer:
         await progress.step("🧮", "Считаю: средняя цена, спред, фандинг, риски")
         return snaps
 
-    async def analyze(self, q: ParsedQuery, skills: list[Skill], progress: Progress | None = None) -> AnalysisResult:
+    async def analyze(
+        self,
+        q: ParsedQuery,
+        skills: list[Skill],
+        progress: Progress | None = None,
+        live: LiveSink | None = None,
+    ) -> AnalysisResult:
+        """live — куда показывать ответ ИИ прямо по мере генерации (см. handlers/live.py)."""
         t0 = time.monotonic()
         progress = progress if progress is not None else Progress()
 
@@ -178,7 +197,10 @@ class Analyzer:
             (g,) = await self._collect_all([(self.registry.for_overview(), None)], progress)
             body = report.overview_section(g)
             news = report.news_block(g, limit=5)
-            verdict, used, agents, ai_html = await self._verdict(q, [], g, skills, progress)
+            card = cards.build_card("overview", [], g)
+            verdict, used, agents, ai_html = await self._verdict(
+                q, [], g, skills, progress, live=live, card=card, prefix=[body, news]
+            )
             text = "\n\n".join(
                 p for p in (body, news, verdict, report.footer(g.ok_count(), g.asked, time.monotonic() - t0)) if p
             )
@@ -191,7 +213,7 @@ class Analyzer:
                 elapsed=time.monotonic() - t0,
                 used_llm=used,
                 agents=agents,
-                card=cards.build_card("overview", [], g),
+                card=card,
                 caption=self._caption("overview", [], g, ai_html, agents, skills),
             )
 
@@ -222,7 +244,11 @@ class Analyzer:
         if ml:
             sections.append(ml)
 
-        verdict, used, agents, ai_html = await self._verdict(q, found, g, skills, progress)
+        kind = "compare" if compare else ("contract" if assets[0].contract else "asset")
+        card = cards.build_card(kind, found, g)
+        verdict, used, agents, ai_html = await self._verdict(
+            q, found, g, skills, progress, live=live, card=card, prefix=list(sections)
+        )
         if verdict:
             sections.append(verdict)
 
@@ -231,7 +257,6 @@ class Analyzer:
         elapsed = time.monotonic() - t0
         sections.append(report.footer(ok, asked, elapsed))
 
-        kind = "compare" if compare else ("contract" if assets[0].contract else "asset")
         symbols = [s.asset.symbol for s in found if s.asset and s.asset.symbol and not s.asset.contract]
         return AnalysisResult(
             kind=kind,
@@ -244,12 +269,27 @@ class Analyzer:
             elapsed=elapsed,
             used_llm=used,
             agents=agents,
-            card=cards.build_card(kind, found, g),
+            card=card,
             caption=self._caption(kind, found, g, ai_html, agents, skills),
         )
 
     @staticmethod
+    def _caption_head(agents: list[swarm.AgentResult], skills: list[Skill], ai: bool) -> str:
+        """Первые строки подписи: итог роя и подключённый навык."""
+        head = []
+        ok = [a for a in agents if a.ok]
+        if ok:
+            counts = " · ".join(
+                f"{icon} {n}" for sig, icon in swarm.SIGNAL_ICON.items() if (n := sum(1 for a in ok if a.signal == sig))
+            )
+            head.append(f"🐝 Рой из {len(ok)} {'агента' if len(ok) == 1 else 'агентов'}: {counts}")
+        if skills and ai:
+            head.append("🧠 Навык: " + esc(", ".join(s.name for s in skills)))
+        return "\n".join(head)
+
+    @classmethod
     def _caption(
+        cls,
         kind: str,
         found: list[Snapshot],
         g: Snapshot | None,
@@ -258,15 +298,7 @@ class Analyzer:
         skills: list[Skill],
     ) -> str:
         """Живой текст под карточкой: ответ ИИ, а без него — связный текст по шаблону."""
-        head = []
-        ok = [a for a in agents if a.ok]
-        if ok:
-            counts = " · ".join(
-                f"{icon} {n}" for sig, icon in swarm.SIGNAL_ICON.items() if (n := sum(1 for a in ok if a.signal == sig))
-            )
-            head.append(f"🐝 Рой из {len(ok)} {'агента' if len(ok) == 1 else 'агентов'}: {counts}")
-        if skills and ai_html:
-            head.append("🧠 Навык: " + esc(", ".join(s.name for s in skills)))
+        head = cls._caption_head(agents, skills, ai=bool(ai_html))
         if ai_html:
             body = ai_html
         elif kind == "overview" and g is not None:
@@ -279,7 +311,7 @@ class Analyzer:
             body = prose.asset(found[0], g)
         else:
             body = ""
-        return "\n".join(head) + ("\n\n" if head and body else "") + body
+        return head + ("\n\n" if head and body else "") + body
 
     async def _verdict(
         self,
@@ -288,6 +320,10 @@ class Analyzer:
         g: Snapshot | None,
         skills: list[Skill],
         progress: Progress,
+        *,
+        live: LiveSink | None = None,
+        card: Card | None = None,
+        prefix: list[str] | None = None,
     ) -> tuple[str, bool, list[swarm.AgentResult], str | None]:
         """Рой агентов (если включён) → итог главного аналитика → или вывод по правилам.
 
@@ -320,15 +356,29 @@ class Analyzer:
                 await progress.step("✍️", f"Свожу выводы {len(answered)} агентов и пишу ответ")
             else:
                 await progress.step("✍️", "Анализирую данные и пишу ответ")
+            title = "🤖 <b>Итог</b>" if answered else "🤖 <b>Вывод</b>"
+            if skills:
+                title += f" · навык: {esc(', '.join(s.name for s in skills))}"
+            on_text = None
+            if live is not None:
+                head = self._caption_head(agents, skills, ai=True)
+                caption_head = head + "\n\n" if head else ""
+                text_prefix = "\n\n".join(p for p in [*(prefix or []), *blocks, title] if p) + "\n"
+
+                async def on_text(acc: str) -> None:
+                    # первый кусок от модели: «Думаю…» уступает место ответу
+                    if not live.started:
+                        await live.begin(card, caption_head, text_prefix)
+                    await live.update(to_html(acc))
+
             try:
-                text = await self.llm.verdict(q.raw, report.llm_context(snaps, g), skills, agents=answered or None)
+                text = await self.llm.verdict(
+                    q.raw, report.llm_context(snaps, g), skills, agents=answered or None, on_text=on_text
+                )
             except Exception:  # noqa: BLE001
                 log.exception("LLM verdict failed")
                 text = None
             if text:
-                title = "🤖 <b>Итог</b>" if answered else "🤖 <b>Вывод</b>"
-                if skills:
-                    title += f" · навык: {esc(', '.join(s.name for s in skills))}"
                 ai_html = to_html(text)
                 blocks.append(f"{title}\n{ai_html}")
                 return "\n\n".join(blocks), True, agents, ai_html

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import itertools
 from datetime import datetime
 
@@ -193,7 +194,7 @@ def dispatcher():
     return build_dispatcher(None)  # type: ignore[arg-type]
 
 
-async def make_env(registry, dispatcher, **overrides):
+async def make_env(registry, dispatcher, hub=None, **overrides):
     overrides.setdefault("stream_answers", False)  # печать проверяем отдельными тестами
     settings = Settings(bot_token="1:TEST", bot_name="Trending", database_path=":memory:", daily_limit=4, **overrides)
     db = Database(":memory:")
@@ -202,7 +203,7 @@ async def make_env(registry, dispatcher, **overrides):
     for sid in ("binance", "coingecko", "fear_greed", "coingecko_markets", "binance_klines"):
         reg.add(registry.get(sid))
     http = api()
-    llm = LLM(AIHub({}), "claude-opus-5-5", "medium", "Trending")
+    llm = LLM(hub or AIHub({}), "claude-opus-5-5", "medium", "Trending")
     svc = Services(
         settings=settings,
         db=db,
@@ -603,5 +604,64 @@ async def test_text_answer_is_typed_into_thinking_message(registry, dispatcher):
         edits = [r for r in session.requests if isinstance(r, EditMessageText)]  # всё правится в этом же сообщении
         typed = [e for e in edits if e.text.endswith("▍")]
         assert len(typed) >= 2 and "Bitcoin" in edits[-1].text and edits[-1].reply_markup is not None
+    finally:
+        await svc.db.close()
+
+
+# --- ответ прямо из ИИ, по мере генерации -----------------------------------------------------------
+
+AI_ANSWER = (
+    "BTC держится у **$100K** после роста на 1% за сутки. Капитализация $2T, объёмы ровные, "
+    "паники в деривативах нет. Фон спокойный: страх и жадность 50 — нейтрально. "
+    "Следить стоит за удержанием $99K: ниже — откат к $95K, выше — попытка обновить максимум."
+)
+
+
+class StreamingHub(AIHub):
+    """Как Claude со стримингом: отдаёт ответ по словам с небольшими паузами."""
+
+    def __init__(self):
+        super().__init__({"ANTHROPIC_API_KEY": "k"})
+        self.streamed = 0
+
+    async def stream(self, ref, system, prompt, **kw):
+        for word in AI_ANSWER.split(" "):
+            self.streamed += 1
+            await asyncio.sleep(0.003)
+            yield word + " "
+
+
+async def test_ai_answer_streams_into_card_caption(registry, dispatcher):
+    hub = StreamingHub()
+    session, feed, svc = await make_env(
+        registry, dispatcher, hub=hub, report_style="card", stream_answers=True, stream_interval=0.01
+    )
+    try:
+        await feed(msg("разбери BTC"))
+        assert hub.streamed > 10
+        photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+        edits = [r for r in session.requests if isinstance(r, EditMessageCaption)]
+        assert photo.reply_markup is None and len(edits) >= 3  # подпись дописывалась по ходу генерации
+        partial = [e.caption for e in edits[:-1]]
+        assert all(c.endswith("▍") for c in partial)
+        assert [len(c) for c in partial] == sorted(len(c) for c in partial)
+        final = edits[-1]
+        assert final.caption.startswith("BTC держится у <b>$100K</b>") and not final.caption.endswith("▍")
+        assert "📋 Подробно" in [b.text for row in final.reply_markup.inline_keyboard for b in row]
+        assert any(isinstance(r, DeleteMessage) for r in session.requests)  # «Думаю…» убрали
+    finally:
+        await svc.db.close()
+
+
+async def test_ai_answer_streams_into_text_report(registry, dispatcher):
+    session, feed, svc = await make_env(
+        registry, dispatcher, hub=StreamingHub(), report_style="text", stream_answers=True, stream_interval=0.01
+    )
+    try:
+        await feed(msg("разбери BTC"))
+        edits = [r for r in session.requests if isinstance(r, EditMessageText)]
+        typed = [e for e in edits if e.text.endswith("▍")]
+        assert len(typed) >= 3 and all("✱ <b>Bitcoin</b>" in e.text for e in typed)  # отчёт сверху, вывод дописывается
+        assert "🤖 <b>Вывод</b>\nBTC держится" in edits[-1].text and edits[-1].reply_markup is not None
     finally:
         await svc.db.close()
