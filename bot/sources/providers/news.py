@@ -197,8 +197,8 @@ async def google_news_ru(ctx: Ctx):
     category=Category.NEWS,
     scope=Scope.ANY,
     homepage="https://www.cryptocompare.com/news/",
-    key="CRYPTOCOMPARE_API_KEY",  # без ключа API новостей отвечает 401
-    note="бесплатный ключ: developers.coindesk.com",
+    key="CRYPTOCOMPARE_API_KEY",  # бесплатный API закрыт 21.05.2026 — без подписки отвечает 401
+    note="платная подписка CoinDesk Data",
 )
 async def cryptocompare_news(ctx: Ctx):
     params = {"lang": "EN"}

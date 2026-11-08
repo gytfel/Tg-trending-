@@ -94,15 +94,15 @@ async def coinpaprika(ctx: Ctx):
     "cryptocompare",
     "CryptoCompare (CoinDesk Data)",
     homepage="https://www.cryptocompare.com",
-    note="ключ CRYPTOCOMPARE_API_KEY необязателен",
+    key="CRYPTOCOMPARE_API_KEY",  # бесплатный API закрыт 21.05.2026 — без подписки отвечает 401
+    note="платная подписка CoinDesk Data",
     **AGG,
 )
 async def cryptocompare(ctx: Ctx):
-    key = os.environ.get("CRYPTOCOMPARE_API_KEY")
     d = await ctx.http.get_json(
         "https://min-api.cryptocompare.com/data/pricemultifull",
         {"fsyms": ctx.sym, "tsyms": "USD"},
-        headers={"authorization": f"Apikey {key}"} if key else None,
+        headers={"authorization": f"Apikey {ctx.key}"},
         ttl=60,
     )
     raw = ((d.get("RAW") or {}).get(ctx.sym) or {}).get("USD")

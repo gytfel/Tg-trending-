@@ -227,6 +227,7 @@ docker compose up -d --build
 
 Обязателен только `BOT_TOKEN`. Без ключа ИИ бот работает целиком: вывод строится
 по простым правилам, встроенные навыки считаются, а свои навыки не применяются.
+Где взять каждый ключ (ИИ и источники данных) — ссылка над ним в `.env.example`.
 
 ### 🧠 Встроенные навыки
 
@@ -270,7 +271,7 @@ python -m bot.sources.probe BTC --only binance,okx,coingecko -v
 |---|---|---|
 | 🏦 Биржи (спот) | 32 / 40 | Binance, Bybit, OKX, Coinbase, Kraken, KuCoin, Gate, MEXC, Bitget, HTX, Bitfinex, Upbit…, свечи для графика |
 | 📈 Деривативы | 24 / 31 | фандинг и OI с 17 площадок (включая Hyperliquid, dYdX, Deribit), L/S Binance/Bybit/OKX, taker ratio, DVOL, Put/Call |
-| 📊 Агрегаторы | 13 + 5 / 26 | CoinGecko, CoinPaprika, CryptoCompare, CoinLore, DefiLlama Prices, топ монет для «Рынок · 24ч»; CMC, CoinCap, LiveCoinWatch… по ключу |
+| 📊 Агрегаторы | 12 + 6 / 26 | CoinGecko, CoinPaprika, CoinLore, DefiLlama Prices, топ монет для «Рынок · 24ч»; CMC, CoinCap, LiveCoinWatch, CryptoCompare… по ключу |
 | 🦄 DEX | 6 + 1 / 17 | DexScreener, GeckoTerminal (пулы и график), Jupiter, тренды и бусты; Birdeye по ключу |
 | 🧱 DeFi | 9 / 15 | DefiLlama: TVL протокола и сети, комиссии и выручка, доходности, раунды, стейблкоины, объём DEX; Lido |
 | ⛓ Ончейн | 8 + 1 / 24 | mempool.space, Blockchain.com, Blockchair, Coin Metrics (MVRV, активные адреса), газ ETH, Solana RPC |

@@ -2,7 +2,7 @@
 
 > Файл сгенерирован командой `python -m bot.sources.probe --catalog docs/SOURCES.md`.
 
-Всего: **233** · ✅ подключено без ключа: **136** · 🔑 подключено, нужен ключ: **13** · 🛠 в планах: **84**
+Всего: **233** · ✅ подключено без ключа: **135** · 🔑 подключено, нужен ключ: **14** · 🛠 в планах: **84**
 
 
 ## 📊 Агрегаторы (26)
@@ -20,12 +20,12 @@
 | `coinpaprika` | [CoinPaprika](https://coinpaprika.com) | ✅ | тикер |  |
 | `coinpaprika_global` | [CoinPaprika Global](https://coinpaprika.com) | ✅ | рынок |  |
 | `coinpaprika_top` | [CoinPaprika Top](https://coinpaprika.com) | ✅ | рынок |  |
-| `cryptocompare` | [CryptoCompare (CoinDesk Data)](https://www.cryptocompare.com) | ✅ | тикер | ключ CRYPTOCOMPARE_API_KEY необязателен |
 | `defillama_coins` | [DefiLlama Prices](https://defillama.com/docs/api) | ✅ | тикер/контракт |  |
 | `coincap` | [CoinCap](https://coincap.io) | 🔑 `COINCAP_API_KEY` | тикер |  |
 | `coinmarketcap` | [CoinMarketCap](https://coinmarketcap.com) | 🔑 `CMC_API_KEY` | тикер |  |
 | `coinranking` | [Coinranking](https://coinranking.com) | 🔑 `COINRANKING_API_KEY` | тикер |  |
 | `coinstats` | [CoinStats](https://coinstats.app) | 🔑 `COINSTATS_API_KEY` | тикер |  |
+| `cryptocompare` | [CryptoCompare (CoinDesk Data)](https://www.cryptocompare.com) | 🔑 `CRYPTOCOMPARE_API_KEY` | тикер | платная подписка CoinDesk Data |
 | `livecoinwatch` | [LiveCoinWatch](https://www.livecoinwatch.com) | 🔑 `LIVECOINWATCH_API_KEY` | тикер |  |
 | `coincodex` | [CoinCodex](https://coincodex.com) | 🛠 в планах | — |  |
 | `dropstab` | [DropsTab](https://dropstab.com) | 🛠 в планах | — | анлоки, инвесторы |
@@ -252,7 +252,7 @@
 | `utoday` | [U.Today](https://u.today) | ✅ | любой | закрыт для ботов — заголовки через Google News |
 | `watcherguru` | [Watcher.Guru](https://watcher.guru) | ✅ | любой | закрыт для ботов — заголовки через Google News |
 | `zycrypto` | [ZyCrypto](https://zycrypto.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `cryptocompare_news` | [CryptoCompare News](https://www.cryptocompare.com/news/) | 🔑 `CRYPTOCOMPARE_API_KEY` | любой | бесплатный ключ: developers.coindesk.com |
+| `cryptocompare_news` | [CryptoCompare News](https://www.cryptocompare.com/news/) | 🔑 `CRYPTOCOMPARE_API_KEY` | любой | платная подписка CoinDesk Data |
 | `cryptopanic` | [CryptoPanic](https://cryptopanic.com) | 🔑 `CRYPTOPANIC_API_KEY` | любой |  |
 | `newsapi` | [NewsAPI](https://newsapi.org) | 🔑 `NEWSAPI_KEY` | любой |  |
 | `binance_announcements` | [Binance Announcements](https://www.binance.com/en/support/announcement) | 🛠 в планах | — | листинги/делистинги |
