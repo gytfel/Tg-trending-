@@ -10,7 +10,15 @@ from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.base import BaseSession
 from aiogram.enums import ParseMode
-from aiogram.methods import AnswerCallbackQuery, DeleteMessage, EditMessageText, GetMe, SendMessage, SendPhoto
+from aiogram.methods import (
+    AnswerCallbackQuery,
+    DeleteMessage,
+    EditMessageCaption,
+    EditMessageText,
+    GetMe,
+    SendMessage,
+    SendPhoto,
+)
 from aiogram.types import CallbackQuery, Chat, Message, MessageEntity, Update, User
 
 from bot.ai import AIHub
@@ -49,6 +57,14 @@ class FakeSession(BaseSession):
                 text=method.text,
                 reply_markup=method.reply_markup,
             ).as_(bot)  # как настоящая сессия: ответ привязан к боту
+        if isinstance(method, EditMessageCaption):
+            return Message(
+                message_id=method.message_id,
+                date=datetime.now(),
+                chat=Chat(id=method.chat_id or UID, type="private"),
+                caption=method.caption,
+                reply_markup=method.reply_markup,
+            ).as_(bot)
         if isinstance(method, SendPhoto):
             chat_id = method.chat_id or UID
             return Message(
@@ -178,6 +194,7 @@ def dispatcher():
 
 
 async def make_env(registry, dispatcher, **overrides):
+    overrides.setdefault("stream_answers", False)  # печать проверяем отдельными тестами
     settings = Settings(bot_token="1:TEST", bot_name="Trending", database_path=":memory:", daily_limit=4, **overrides)
     db = Database(":memory:")
     await db.connect()
@@ -547,3 +564,44 @@ async def test_card_failure_falls_back_to_text(card_env, monkeypatch):
     await feed(msg("разбери BTC"))
     assert not any(isinstance(r, SendPhoto) for r in session.requests)
     assert "✱ <b>Bitcoin</b>" in session.last().text  # пришёл обычный построчный отчёт
+
+
+# --- плавная «печать» ответа -------------------------------------------------------------------
+
+
+@pytest.fixture
+async def stream_env(registry, dispatcher):
+    session, feed, svc = await make_env(
+        registry, dispatcher, report_style="card", stream_answers=True, stream_interval=0.01
+    )
+    yield session, feed, svc
+    await svc.db.close()
+
+
+async def test_card_caption_is_typed_gradually(stream_env):
+    session, feed, _ = stream_env
+    await feed(msg("разбери BTC"))
+    photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+    edits = [r for r in session.requests if isinstance(r, EditMessageCaption)]
+    assert photo.caption.endswith("▍") and photo.reply_markup is None  # первый кусок, без кнопок
+    assert len(edits) >= 2
+    lengths = [len(photo.caption)] + [len(e.caption) for e in edits]
+    assert lengths == sorted(lengths)  # текст только прибавляется
+    assert all(e.caption.endswith("▍") for e in edits[:-1])
+    final = edits[-1]
+    assert not final.caption.endswith("▍") and final.reply_markup is not None  # целиком и с кнопками
+
+
+async def test_text_answer_is_typed_into_thinking_message(registry, dispatcher):
+    session, feed, svc = await make_env(
+        registry, dispatcher, report_style="text", stream_answers=True, stream_interval=0.01
+    )
+    try:
+        await feed(msg("разбери BTC"))
+        thinking = [r for r in session.requests if isinstance(r, SendMessage)][-1]
+        assert thinking.text.startswith("✱ <b>Думаю")
+        edits = [r for r in session.requests if isinstance(r, EditMessageText)]  # всё правится в этом же сообщении
+        typed = [e for e in edits if e.text.endswith("▍")]
+        assert len(typed) >= 2 and "Bitcoin" in edits[-1].text and edits[-1].reply_markup is not None
+    finally:
+        await svc.db.close()

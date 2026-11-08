@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import math
+import re
 from datetime import UTC, datetime
 
 NBSP = " "  # узкий неразрывный пробел для разрядов
@@ -133,3 +134,51 @@ def split_message(text: str, limit: int = 4000) -> list[str]:
     if buf:
         parts.append(buf)
     return parts
+
+
+_HTML_TOKEN = re.compile(r"<[^>]+>|&#?[A-Za-z0-9]+;|[^<&]+|[<&]")
+_TAG_NAME = re.compile(r"</?\s*([a-zA-Z][\w-]*)")
+
+
+def html_prefix(text: str, visible: int) -> str:
+    """Начало Telegram-HTML длиной ~visible видимых символов — с закрытыми тегами.
+
+    Режем по границе слова, сущности (&amp;) не рвём, незакрытые <b>/<i>/<a>/<blockquote>
+    закрываем — иначе Telegram отклонит недописанный кусок при «печати» ответа.
+    """
+    out: list[str] = []
+    stack: list[str] = []
+    count = 0
+    for tok in _HTML_TOKEN.findall(text):
+        if tok.startswith("<") and len(tok) > 1:
+            m = _TAG_NAME.match(tok)
+            name = m.group(1).lower() if m else ""
+            if not tok.startswith("</") and count >= visible:
+                break  # лимит набран — новый тег не открываем
+            if tok.startswith("</"):
+                if name in stack:
+                    while stack and stack.pop() != name:
+                        pass
+            elif not tok.endswith("/>"):
+                stack.append(name)
+            out.append(tok)
+            continue
+        if tok.startswith("&") and len(tok) > 1:
+            if count >= visible:
+                break
+            out.append(tok)
+            count += 1
+            continue
+        room = visible - count
+        if room <= 0:
+            break
+        if len(tok) <= room:
+            out.append(tok)
+            count += len(tok)
+            continue
+        piece = tok[:room]
+        cut = piece.rfind(" ")
+        out.append(piece[:cut] if cut > room // 2 else piece)  # стараемся не рвать слово
+        count = visible
+        break
+    return "".join(out).rstrip() + "".join(f"</{name}>" for name in reversed(stack))

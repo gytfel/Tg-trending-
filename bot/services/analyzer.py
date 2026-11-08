@@ -40,6 +40,22 @@ CAT_SHORT = {
 }
 
 
+# что бот «читает» прямо сейчас — по категории последнего ответившего источника
+READING = {
+    Category.CEX: ("💱", "Сверяю цены на биржах"),
+    Category.DERIVATIVES: ("📈", "Смотрю фандинг и открытый интерес"),
+    Category.AGGREGATOR: ("📊", "Сверяю капитализацию и объёмы"),
+    Category.DEX: ("🦄", "Смотрю пулы на DEX"),
+    Category.DEFI: ("🧱", "Смотрю TVL и выручку протоколов"),
+    Category.ONCHAIN: ("⛓", "Считаю ончейн-метрики"),
+    Category.SECURITY: ("🛡", "Проверяю контракт"),
+    Category.SENTIMENT: ("🌡", "Смотрю настроение рынка"),
+    Category.NEWS: ("📰", "Читаю новости"),
+    Category.SOCIAL: ("💬", "Читаю соцсети"),
+    Category.MACRO: ("🌍", "Смотрю макро-фон"),
+}
+
+
 def describe_task(q: ParsedQuery, skills: list[Skill]) -> str:
     """«Понял задачу: …» — первая строка размышлений."""
     targets = q.targets
@@ -126,16 +142,25 @@ class Analyzer:
         return await resolve_symbol(self.http, value)
 
     async def _collect_all(self, jobs: list[tuple[list, Asset | None]], progress: Progress) -> list[Snapshot]:
-        """Опрашивает источники и ведёт живой счётчик «Работаю с данными: N из M»."""
+        """Опрашивает источники. В «Думаю…» — что сейчас читаем (по последнему ответившему) и счётчик."""
         total = sum(len(srcs) for srcs, _ in jobs)
-        done = [0]
+        state = {"done": 0, "cat": None}
 
-        def tick() -> None:
-            done[0] += 1
+        def tick(src) -> None:
+            state["done"] += 1
+            state["cat"] = src.category
 
-        await progress.step("🔧", lambda: f"Работаю с данными: {done[0]} из {total} источников")
+        def icon() -> str:
+            return READING.get(state["cat"], ("🔧", ""))[0]
+
+        def text() -> str:
+            what = READING.get(state["cat"], ("", "Собираю данные"))[1]
+            return f"{what} · {state['done']} из {total}"
+
+        await progress.step(icon, text)
         snaps = list(await asyncio.gather(*(self._collect(srcs, a, tick) for srcs, a in jobs)))
         await progress.update(describe_collected(snaps), icon="📡")
+        await progress.step("🧮", "Считаю: средняя цена, спред, фандинг, риски")
         return snaps
 
     async def analyze(self, q: ParsedQuery, skills: list[Skill], progress: Progress | None = None) -> AnalysisResult:
@@ -292,9 +317,9 @@ class Analyzer:
 
         if self.llm.enabled:
             if answered:
-                await progress.step("🤖", f"Свожу выводы {len(answered)} агентов в итог")
+                await progress.step("✍️", f"Свожу выводы {len(answered)} агентов и пишу ответ")
             else:
-                await progress.step("🤖", "Анализирую данные и формулирую вывод")
+                await progress.step("✍️", "Анализирую данные и пишу ответ")
             try:
                 text = await self.llm.verdict(q.raw, report.llm_context(snaps, g), skills, agents=answered or None)
             except Exception:  # noqa: BLE001
@@ -308,7 +333,7 @@ class Analyzer:
                 blocks.append(f"{title}\n{ai_html}")
                 return "\n\n".join(blocks), True, agents, ai_html
         if snaps:
-            await progress.step("🧭", "Делаю вывод по правилам")
+            await progress.step("✍️", "Пишу ответ")
             bullets = "\n".join(f"• {esc(b)}" for b in report.rule_verdict(snaps, g))
             note = "\n<i>Навыки применяются в ИИ-выводе — подключи ключ ИИ.</i>" if skills else ""
             blocks.append(f"🧭 <b>Коротко</b>\n{bullets}{note}")

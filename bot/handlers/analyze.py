@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -19,6 +21,7 @@ from aiogram.utils.chat_action import ChatActionSender
 from bot import keyboards, texts
 from bot.callbacks import Ask, Nav, ReportCb
 from bot.formatting import esc, split_message
+from bot.handlers import streaming
 from bot.handlers.common import safe_edit, show
 from bot.handlers.thinking import ThinkingMessage
 from bot.query_parser import parse_query
@@ -167,7 +170,9 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
     thinking: ThinkingMessage | None = None
     try:
         # «✱ Думаю…» — живое сообщение с ходом обработки; потом оно превратится в отчёт
-        thinking = await ThinkingMessage.start(chat_msg, reply=reply)
+        in_group = chat_msg.chat.type != ChatType.PRIVATE
+        # в группах у Telegram лимит ~20 сообщений в минуту — обновляем «Думаю…» реже
+        thinking = await ThinkingMessage.start(chat_msg, reply=reply, interval=3.0 if in_group else 1.5)
         try:
             async with ChatActionSender.typing(bot=chat_msg.bot, chat_id=chat_msg.chat.id):
                 result = await svc.analyzer.analyze(parsed, used_skills, thinking)
@@ -196,17 +201,59 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
     svc.remember(user_id, text, result)
 
     watch_symbol = result.symbols[0] if result.kind == "asset" and result.symbols else None
-    sent = None
-    if svc.settings.report_style.strip().lower() == "card" and result.card is not None:
-        sent = await _send_card(chat_msg, progress, result, keyboards.report(watch_symbol, details=True), svc, reply)
-    if sent is None:  # текстовый отчёт: по настройке или если картинка не получилась
-        sent = await _send_text(chat_msg, progress, result.text, keyboards.report(watch_symbol))
+    group = chat_msg.chat.type != ChatType.PRIVATE
+    pace = Pace(
+        stream=svc.settings.stream_answers and svc.settings.stream_interval > 0,
+        interval=max(svc.settings.stream_interval, 1.2) if group else svc.settings.stream_interval,
+        group=group,
+    )
+    async with ChatActionSender.typing(bot=chat_msg.bot, chat_id=chat_msg.chat.id):  # «печатает…» до конца
+        sent = None
+        if svc.settings.report_style.strip().lower() == "card" and result.card is not None:
+            kb = keyboards.report(watch_symbol, details=True)
+            sent = await _send_card(chat_msg, progress, result, kb, svc, reply, pace)
+        if sent is None:  # текстовый отчёт: по настройке или если картинка не получилась
+            sent = await _send_text(chat_msg, progress, result.text, keyboards.report(watch_symbol), pace)
     svc.remember_report(sent.chat.id, sent.message_id, text, result)
 
 
-async def _send_text(chat_msg: Message, progress: Message, text: str, kb: InlineKeyboardMarkup) -> Message:
-    """Построчный отчёт: первая часть заменяет «Думаю…», кнопки — на последней части."""
+@dataclass(slots=True)
+class Pace:
+    """Как «печатать» ответ: плавно кусками или сразу (STREAM_ANSWERS / STREAM_INTERVAL)."""
+
+    stream: bool = False
+    interval: float = 0.7
+    group: bool = False
+
+
+NO_STREAM = Pace()
+
+
+async def _stream_edit(msg: Message, text: str, kb: InlineKeyboardMarkup | None, pace: Pace) -> Message:
+    """Печатает текст в существующем сообщении (например, вместо «Думаю…»)."""
+    fr = streaming.frames(text, pace.group) if pace.stream else []
+    if not fr:
+        return await _send(msg, text, kb, edit=True)
+    try:
+        msg = await safe_edit(msg, fr[0])
+
+        async def edit(t: str, k: InlineKeyboardMarkup | None) -> None:
+            await msg.edit_text(t, reply_markup=k)
+
+        await streaming.play(edit, fr[1:], text, kb, interval=pace.interval)
+        return msg
+    except TelegramBadRequest as e:
+        log.debug("печать не удалась (%s) — показываю целиком", e)
+        return await _send(msg, text, kb, edit=True)
+
+
+async def _send_text(
+    chat_msg: Message, progress: Message, text: str, kb: InlineKeyboardMarkup, pace: Pace = NO_STREAM
+) -> Message:
+    """Текстовый ответ: печатается вместо «Думаю…»; длинный — частями, кнопки на последней."""
     parts = split_message(text)
+    if len(parts) == 1:
+        return await _stream_edit(progress, text, kb, pace)
     sent = progress
     for i, part in enumerate(parts):
         last = i == len(parts) - 1
@@ -215,22 +262,28 @@ async def _send_text(chat_msg: Message, progress: Message, text: str, kb: Inline
 
 
 async def _send_card(
-    chat_msg: Message, progress: Message, result, kb: InlineKeyboardMarkup, svc: Services, reply: bool
+    chat_msg: Message,
+    progress: Message,
+    result,
+    kb: InlineKeyboardMarkup,
+    svc: Services,
+    reply: bool,
+    pace: Pace = NO_STREAM,
 ) -> Message | None:
-    """Картинка с цифрами + живой текст подписью (как сообщение аналитика). None — не получилось."""
+    """Картинка с цифрами + живой текст подписью, который «печатается». None — картинка не получилась."""
+    caption = result.caption
+    fits = bool(caption) and visible_len(caption) <= CAPTION_LIMIT
+    fr = streaming.frames(caption, pace.group) if pace.stream and fits else []
     try:
         me = await chat_msg.bot.me()
         brand = Brand(svc.settings.bot_name, me.username, now_in(svc.settings.timezone))
         png = await asyncio.to_thread(render, result.card, brand)
         photo = BufferedInputFile(png, filename="trending.png")
         send_photo = chat_msg.reply_photo if reply else chat_msg.answer_photo
-        caption = result.caption
-        if caption and visible_len(caption) <= CAPTION_LIMIT:
-            sent = await send_photo(photo, caption=caption, reply_markup=kb)
-        else:  # длинный текст — отдельным сообщением под картинкой
-            await send_photo(photo)
-            sent = await _send_text(chat_msg, progress, caption or result.text, kb)
-            return sent
+        if fits:
+            sent = await send_photo(photo, caption=fr[0] if fr else caption, reply_markup=None if fr else kb)
+        else:
+            sent = await send_photo(photo)
     except Exception:  # noqa: BLE001 — картинка не должна ломать ответ
         log.exception("card report failed, falling back to text")
         return None
@@ -238,6 +291,20 @@ async def _send_card(
         await progress.delete()  # «Думаю…» больше не нужно — ответ пришёл картинкой
     except TelegramBadRequest:
         pass
+    if not fits:  # длинный текст — отдельным сообщением под картинкой
+        first = await chat_msg.answer("✍️")
+        return await _stream_edit(first, caption or result.text, kb, pace)
+    if fr:
+
+        async def edit(t: str, k: InlineKeyboardMarkup | None) -> None:
+            await sent.edit_caption(caption=t, reply_markup=k)
+
+        try:
+            await streaming.play(edit, fr[1:], caption, kb, interval=pace.interval)
+        except TelegramBadRequest as e:
+            log.debug("печать подписи не удалась (%s) — показываю целиком", e)
+            with contextlib.suppress(TelegramBadRequest):
+                await sent.edit_caption(caption=caption, reply_markup=kb)
     return sent
 
 

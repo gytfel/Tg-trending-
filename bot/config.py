@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     rules_url: str = ""  # ссылка «Правила использования» в помощи
     report_style: str = "card"  # card — картинка + живой текст; text — построчный отчёт
     timezone: str = "UTC"  # время на карточках, например Europe/Kyiv
+    stream_answers: bool = True  # «печатать» ответ плавно, как ИИ-чаты
+    stream_interval: float = 0.7  # секунд между кусками текста
 
     # Хранилище
     database_path: str = "data/bot.sqlite3"

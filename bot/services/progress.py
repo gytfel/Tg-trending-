@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-Text = str | Callable[[], str]  # текст шага или функция — для «живых» строк вроде счётчика
+Text = str | Callable[[], str]  # текст (или иконка) шага или функция — для «живых» строк вроде счётчика
 
 
 def resolve(text: Text) -> str:
@@ -24,12 +24,12 @@ class Progress:
     def __init__(self) -> None:
         self.steps: list[list] = []  # [иконка, текст]
 
-    async def step(self, icon: str, text: Text) -> None:
+    async def step(self, icon: Text, text: Text) -> None:
         """Новый шаг."""
         self.steps.append([icon, text])
         await self.changed()
 
-    async def update(self, text: Text, icon: str | None = None) -> None:
+    async def update(self, text: Text, icon: Text | None = None) -> None:
         """Заменить текст последнего шага (например, «работаю…» → «собрал…»)."""
         if not self.steps:
             await self.step(icon or "•", text)
@@ -43,4 +43,11 @@ class Progress:
         """Хук для отображения; базовая версия ничего не показывает."""
 
     def lines(self) -> list[str]:
-        return [f"{icon} {resolve(text)}" for icon, text in self.steps]
+        return [f"{resolve(icon)} {resolve(text)}" for icon, text in self.steps]
+
+    def current(self) -> tuple[str, str] | None:
+        """Текущий шаг — его и показывает «Думаю…»."""
+        if not self.steps:
+            return None
+        icon, text = self.steps[-1]
+        return resolve(icon), resolve(text)

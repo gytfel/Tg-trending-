@@ -1,7 +1,7 @@
 """«✱ Думаю…» — живое сообщение с ходом обработки запроса.
 
-Показывает заголовок с бегущими точками и таймером, а под ним — короткие
-курсивные шаги из Progress. Правки сообщения прореживаются (не чаще раза в
+Три строки, как у ИИ-чатов: «Думаю…» с бегущими точками, текущее действие
+курсивом («📰 Читаю новости · 34 из 131») и таймер «⏱ 8 с». Правки сообщения прореживаются (не чаще раза в
 секунду), чтобы не упираться в лимиты Telegram. Когда разбор готов,
 сообщение заменяется отчётом.
 """
@@ -18,12 +18,11 @@ from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.types import Message
 
 from bot.formatting import esc
-from bot.services.progress import Progress, resolve
+from bot.services.progress import Progress
 
 log = logging.getLogger(__name__)
 
-MAX_LINES = 9  # в сообщении видны последние шаги — коротко
-MAX_STEP_LEN = 80
+MAX_STEP_LEN = 70
 
 
 class ThinkingMessage(Progress):
@@ -62,15 +61,16 @@ class ThinkingMessage(Progress):
     # -- отрисовка ---------------------------------------------------------------------
 
     def render(self) -> str:
+        """Как у ИИ-чатов: «Думаю…», одно текущее действие и таймер."""
         dots = "." * (self._frame % 3 + 1)
         seconds = int(self.clock() - self._t0)
-        head = f"✱ <b>Думаю{dots}</b>" + (f" <i>· {seconds} с</i>" if seconds >= 3 else "")
-        lines = [head]
-        for icon, text in self.steps[-MAX_LINES:]:
-            line = resolve(text)
+        lines = [f"✱ <b>Думаю{dots}</b>"]
+        if cur := self.current():
+            icon, line = cur
             if len(line) > MAX_STEP_LEN:
                 line = line[: MAX_STEP_LEN - 1].rstrip() + "…"
-            lines.append(f"{icon} <i>{esc(line)}</i>")
+            lines.append(f"{esc(icon)} <i>{esc(line)}</i>")
+        lines.append(f"⏱ {seconds} с")
         return "\n".join(lines)
 
     # -- отправка -------------------------------------------------------------------------
