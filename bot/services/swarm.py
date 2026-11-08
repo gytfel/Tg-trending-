@@ -22,6 +22,7 @@ from typing import Any
 
 from bot.ai import AIError, AIHub, ModelRef
 from bot.formatting import esc
+from bot.query_parser import ParsedQuery, extract_skills
 from bot.services.report import snapshot_context
 from bot.sources.base import Category
 from bot.sources.collector import Snapshot
@@ -194,6 +195,45 @@ def slice_snapshot(s: Snapshot, categories: frozenset[Category]) -> dict[str, An
     return ctx
 
 
+# --- когда звать рой ---------------------------------------------------------------------------
+# Рой — 5 агентов + главный аналитик, то есть до 6 вызовов ИИ на вопрос. На «разбери BTC»
+# хватает одного аналитика; рой нужен там, где разные взгляды реально помогают.
+
+MODES = {"auto": "auto", "swarm": "auto", "always": "always", "single": "single"}  # swarm — старое имя auto
+LONG_QUESTION = 8  # слов (без тикеров, чисел и «навык …») — развёрнутый вопрос
+
+_DEEP = re.compile(
+    r"(?i)(?<!\w)(подробн\w*|детальн\w*|глубок\w*|полн\w* разбор\w*|рой|роем|роя|агент\w*|"
+    r"deep|detailed|in-depth)(?!\w)"
+)
+_QUICK = re.compile(r"(?i)(?<!\w)(коротко|кратко|быстро|в двух словах|quick|tl;?dr)(?!\w)")
+_DECIDE = re.compile(
+    r"(?i)(?<!\w)(стоит ли|покупать|купить|брать|продавать|продать|заходить|зайти|входить|вход\w*|"
+    r"выходить|шорт\w*|лонг\w*|прогноз\w*|перспектив\w*|думаешь|мнение|should i|worth|buy|sell)(?!\w)"
+)
+_WORD = re.compile(r"[^\W\d_]{2,}")
+
+
+def swarm_reason(q: ParsedQuery, kind: str, custom_skills: bool = False) -> str | None:
+    """Зачем звать рой на этот вопрос; None — хватит одного аналитика."""
+    text, _ = extract_skills(q.raw, q.skills)  # «навык риск депозит 2000» не делает вопрос сложным
+    if _DEEP.search(text):
+        return "просят подробный разбор"
+    if _QUICK.search(text):
+        return None
+    if kind == "compare":
+        return "сравнение"
+    if kind == "contract":
+        return "проверка токена"
+    if custom_skills:
+        return "свой навык"
+    if _DECIDE.search(text):
+        return "вопрос о решении"
+    if len(_WORD.findall(text)) >= LONG_QUESTION:
+        return "развёрнутый вопрос"
+    return None
+
+
 class Swarm:
     def __init__(
         self,
@@ -206,6 +246,7 @@ class Swarm:
         timeout: float = 45.0,
         bot_name: str = "Trending",
         enabled: bool = True,
+        mode: str = "always",
     ) -> None:
         self.hub = hub
         self.default = ModelRef.parse(default_model) if default_model else None
@@ -214,7 +255,8 @@ class Swarm:
         self.effort = (effort or "").strip() or None
         self.timeout = timeout
         self.bot_name = bot_name
-        self._enabled = enabled
+        self.mode = MODES.get(mode.strip().lower(), "auto")  # auto — на сложные вопросы, always — всегда
+        self._enabled = enabled and self.mode != "single"
 
     # -- настройка ---------------------------------------------------------------------
 
@@ -228,6 +270,14 @@ class Swarm:
     @property
     def enabled(self) -> bool:
         return self._enabled and any(self.model_for(r) for r in ROLES)
+
+    def reason(self, q: ParsedQuery, kind: str, custom_skills: bool = False) -> str | None:
+        """Звать ли рой на этот вопрос: причина или None."""
+        if not self.enabled:
+            return None
+        if self.mode == "always":
+            return "рой на каждый вопрос"
+        return swarm_reason(q, kind, custom_skills)
 
     def describe(self) -> str:
         models = sorted({self.model_for(r).short for r in ROLES if self.model_for(r)})  # type: ignore[union-attr]

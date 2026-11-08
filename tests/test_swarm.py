@@ -237,3 +237,74 @@ async def test_analyzer_swarm_without_lead_falls_back_to_rules(registry):
     res = await an.analyze(parse_query("BTC"), [])
     assert "🐝 <b>Рой агентов</b>" in res.text and "🧭 <b>Коротко</b>" in res.text
     assert res.used_llm  # агенты ответили
+
+
+# --- рой по требованию (AI_MODE=auto) ------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "kind", "custom", "reason"),
+    [
+        ("разбери BTC", "asset", False, None),
+        ("BTC", "asset", False, None),
+        ("что с SOL", "asset", False, None),
+        ("что сейчас на рынке?", "overview", False, None),
+        ("SOL навык риск депозит 2000 риск 2% стоп 5%", "asset", False, None),  # цифры навыка — не «длинный»
+        ("разбери BTC подробно", "asset", False, "просят подробный разбор"),
+        ("BTC детально, роем", "asset", False, "просят подробный разбор"),
+        ("сравни ARB и OP", "compare", False, "сравнение"),
+        ("сравни ARB и OP коротко", "compare", False, None),  # «коротко» — без роя
+        ("0x6982508145454Ce325dDbE47a25d4ec3d2311933", "contract", False, "проверка токена"),
+        ("разбери SOL навык тейки", "asset", True, "свой навык"),
+        ("стоит ли покупать ETH", "asset", False, "вопрос о решении"),
+        ("BTC лонг или шорт?", "asset", False, "вопрос о решении"),
+        (
+            "как думаешь куда пойдёт рынок на этой неделе после новостей о ставке ФРС",
+            "overview",
+            False,
+            "вопрос о решении",
+        ),
+        (
+            "расскажи что происходит с эфиром на фоне обновления сети и притока в фонды",
+            "asset",
+            False,
+            "развёрнутый вопрос",
+        ),
+        ("настрой BTC строй героя", "asset", False, None),  # «рой» внутри слов — не просьба о рое
+    ],
+)
+def test_swarm_reason(text, kind, custom, reason):
+    from bot.services.swarm import swarm_reason
+
+    q = parse_query(text, ["тейки", "риск"])
+    assert swarm_reason(q, kind, custom) == reason
+
+
+def test_swarm_modes():
+    hub = FakeHub()
+    q = parse_query("разбери BTC")
+    assert Swarm(hub, default_model="claude-haiku-5-5", mode="always").reason(q, "asset") == "рой на каждый вопрос"
+    assert Swarm(hub, default_model="claude-haiku-5-5", mode="auto").reason(q, "asset") is None
+    assert Swarm(hub, default_model="claude-haiku-5-5", mode="swarm").mode == "auto"  # старое имя
+    off = Swarm(hub, default_model="claude-haiku-5-5", mode="single")
+    assert not off.enabled and off.reason(parse_query("BTC подробно"), "asset") is None
+
+
+async def test_analyzer_auto_mode_saves_calls(registry):
+    from tests.test_analyzer import btc_http, small_registry
+
+    reg = small_registry(registry, ["binance", "bybit", "coingecko", "bybit_linear", "fear_greed", "coindesk"])
+
+    async def run(text):
+        hub = LeadHub()
+        swarm = Swarm(hub, default_model="claude-haiku-5-5", bot_name="Trending", mode="auto")
+        an = Analyzer(btc_http(), reg, LLM(hub, "claude-opus-5-5", "medium", "Trending"), swarm=swarm, deadline=3)
+        return hub, await an.analyze(parse_query(text), [])
+
+    hub, res = await run("разбери BTC")
+    assert hub.calls == [] and res.agents == []  # агенты не вызывались
+    assert "🐝" not in res.text and "🤖 <b>Вывод</b>\nИтог роя: держать." in res.text  # ответил один аналитик
+
+    hub, res = await run("разбери BTC подробно")
+    assert {role for _, role, _ in hub.calls} == {"market", "derivatives", "news"}
+    assert "🐝 <b>Рой агентов</b>" in res.text and "🤖 <b>Итог</b>" in res.text

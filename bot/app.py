@@ -58,7 +58,7 @@ async def build_services(settings: Settings) -> Services:
         effort=settings.swarm_agent_effort,
         timeout=settings.swarm_agent_timeout,
         bot_name=settings.bot_name,
-        enabled=settings.ai_mode.strip().lower() == "swarm",
+        mode=settings.ai_mode,  # auto — рой на сложные вопросы, always — всегда, single — без роя
     )
     analyzer = Analyzer(
         http,

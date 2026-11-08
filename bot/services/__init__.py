@@ -47,7 +47,9 @@ class Services:
     def ai_status(self) -> str:
         lead = self.llm.ref.short if self.llm.enabled else None
         if self.swarm is not None and self.swarm.enabled:
-            return f"рой агентов: {self.swarm.describe()}" + (f" + главный аналитик ({lead})" if lead else "")
+            when = "на сложные вопросы" if self.swarm.mode == "auto" else "на каждый вопрос"
+            head = f"рой агентов {when}: {self.swarm.describe()}"
+            return head + (f" + главный аналитик ({lead})" if lead else "")
         return f"один аналитик ({lead})" if lead else "выключен"
 
     def remember_report(

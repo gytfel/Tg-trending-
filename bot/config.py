@@ -40,7 +40,9 @@ class Settings(BaseSettings):
     llm_timeout: float = 90.0
 
     # Рой агентов: специалисты по деривативам, рынку, ончейну, новостям и рискам
-    ai_mode: str = "swarm"  # swarm — рой + главный аналитик; single — только главный
+    # auto (или swarm) — рой на сложные вопросы, на простые — один аналитик;
+    # always — рой на каждый вопрос; single — только главный аналитик
+    ai_mode: str = "auto"
     swarm_agent_model: str = "claude-haiku-5-5"  # модель агентов по умолчанию
     swarm_agent_effort: str = "low"
     swarm_agent_timeout: float = 45.0

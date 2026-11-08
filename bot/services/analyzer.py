@@ -205,7 +205,15 @@ class Analyzer:
             blocks = skills_builtin.run(builtins, skills_builtin.SkillInput("overview", [], g, skill_text))
             ai_skills = skills_builtin.for_ai(skills, builtins, blocks)
             verdict, used, agents, ai_html = await self._verdict(
-                q, [], g, ai_skills, progress, live=live, card=card, prefix=[body, news, *blocks.values()]
+                q,
+                [],
+                g,
+                ai_skills,
+                progress,
+                live=live,
+                card=card,
+                prefix=[body, news, *blocks.values()],
+                use_swarm=self._use_swarm(q, "overview", skills),
             )
             text = "\n\n".join(
                 p
@@ -264,7 +272,15 @@ class Analyzer:
         sections.extend(blocks.values())
         ai_skills = skills_builtin.for_ai(skills, builtins, blocks)
         verdict, used, agents, ai_html = await self._verdict(
-            q, found, g, ai_skills, progress, live=live, card=card, prefix=list(sections)
+            q,
+            found,
+            g,
+            ai_skills,
+            progress,
+            live=live,
+            card=card,
+            prefix=list(sections),
+            use_swarm=self._use_swarm(q, kind, skills),
         )
         if verdict:
             sections.append(verdict)
@@ -289,6 +305,15 @@ class Analyzer:
             card=card,
             caption=self._caption(kind, found, g, ai_html, agents, ai_skills, list(blocks.values())),
         )
+
+    def _use_swarm(self, q: ParsedQuery, kind: str, skills: list[Skill]) -> bool:
+        """Рой — только на сложные вопросы (AI_MODE=auto): простой «разбери BTC» делает один аналитик."""
+        if self.swarm is None:
+            return False
+        custom = any(skills_builtin.get(s.name) is None for s in skills)
+        reason = self.swarm.reason(q, kind, custom)
+        log.info("swarm for %r (%s): %s", q.raw[:60], kind, reason or "нет — хватит одного аналитика")
+        return reason is not None
 
     @staticmethod
     def _caption_head(agents: list[swarm.AgentResult], skills: list[Skill], ai: bool) -> str:
@@ -348,6 +373,7 @@ class Analyzer:
         live: LiveSink | None = None,
         card: Card | None = None,
         prefix: list[str] | None = None,
+        use_swarm: bool = True,
     ) -> tuple[str, bool, list[swarm.AgentResult], str | None]:
         """Рой агентов (если включён) → итог главного аналитика → или вывод по правилам.
 
@@ -355,7 +381,7 @@ class Analyzer:
         """
         blocks: list[str] = []
         agents: list[swarm.AgentResult] = []
-        if self.swarm is not None and self.swarm.enabled:
+        if use_swarm and self.swarm is not None and self.swarm.enabled:
 
             async def started(roles: list[swarm.Role]) -> None:
                 await progress.step("🐝", "Подключаю агентов: " + ", ".join(r.title.lower() for r in roles))
