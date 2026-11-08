@@ -24,7 +24,7 @@ from bot.formatting import esc, split_message
 from bot.handlers import streaming
 from bot.handlers.common import safe_edit, show
 from bot.handlers.draft import Draft, DraftUnavailable, drafts_available
-from bot.handlers.live import LiveAnswer
+from bot.handlers.live import LiveAnswer, send_card
 from bot.handlers.thinking import ThinkingMessage
 from bot.query_parser import parse_query
 from bot.render import Brand, render
@@ -381,20 +381,25 @@ async def _send_card(
 
 async def _send_card_draft(
     chat_msg: Message, progress: Message | None, result, kb: InlineKeyboardMarkup, svc: Services, pace: Pace
-) -> Message | None:
-    """Личка с черновиками: картинка сразу, текст под ней плавно пишется черновиком и приходит с кнопками."""
-    try:
-        png = await asyncio.to_thread(render, result.card, await _brand(chat_msg, svc))
-        await chat_msg.answer_photo(BufferedInputFile(png, filename="trending.png"))
-    except Exception:  # noqa: BLE001 — картинка не должна ломать ответ
-        log.exception("card report failed, falling back to text")
-        return None
+) -> Message:
+    """Личка с черновиками: текст плавно пишется черновиком, а когда дописан — одно сообщение:
+    картинка сверху, под ней этот же текст и кнопки (черновик при этом исчезает)."""
+    text = result.caption or result.text
+
+    async def draw() -> bytes:
+        return await asyncio.to_thread(render, result.card, await _brand(chat_msg, svc))
+
+    png = asyncio.create_task(draw())  # рисуем, пока пишется текст
     if progress is not None:
         with contextlib.suppress(TelegramBadRequest):
             await progress.delete()
-    text = result.caption or result.text
     await _type_draft(pace.draft, split_message(text)[0] if text else "", pace.draft_interval)
-    return await _send_parts(chat_msg, text, kb)
+    sent = None
+    try:
+        sent = await send_card(chat_msg, await png, text, kb)
+    except Exception:  # noqa: BLE001 — картинка не должна ломать ответ
+        log.exception("card report failed, sending text only")
+    return sent if sent is not None else await _send_parts(chat_msg, text, kb)
 
 
 async def _brand(chat_msg: Message, svc: Services) -> Brand:

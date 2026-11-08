@@ -711,14 +711,15 @@ async def test_draft_thinking_then_card_text_typed_in_draft(registry, dispatcher
         typed = [d.text for d in drafts if not d.text.startswith("✱ <b>Думаю")]
         assert len(typed) >= 5
         assert_growing(typed)
-        photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
-        assert photo.caption is None and photo.reply_markup is None  # картинка сразу, текст — под ней
-        final = session.last()
-        assert isinstance(final, SendMessage) and "<b>Bitcoin $100" in final.text
-        assert final.text.startswith(typed[-1].rstrip()[:50])
-        assert "📋 Подробно" in session.buttons(final) and "🔔 Следить за BTC" in session.buttons(final)
-        assert session.requests.index(photo) < session.requests.index(final)
-        await feed(cb("rp:details", message_id=max(svc.reports)[1]))  # кнопки работают и под текстом
+        # текст дописан — и только тогда одно сообщение: картинка сверху, этот же текст подписью, кнопки
+        photos = [r for r in session.requests if isinstance(r, SendPhoto)]
+        assert len(photos) == 1 and session.requests[-1] is photos[0]
+        photo = photos[0]
+        assert "<b>Bitcoin $100" in photo.caption and photo.caption.startswith(typed[-1].rstrip()[:50])
+        assert session.requests.index(photo) > max(session.requests.index(d) for d in drafts)
+        assert "📋 Подробно" in session.buttons(photo) and "🔔 Следить за BTC" in session.buttons(photo)
+        assert not any(isinstance(r, SendMessage) for r in session.requests)  # никаких лишних сообщений
+        await feed(cb("rp:details", message_id=max(svc.reports)[1]))  # кнопки под картинкой работают
         assert "✱ <b>Bitcoin</b> · BTC · #1" in session.last().text
     finally:
         await svc.db.close()
@@ -749,12 +750,10 @@ async def test_ai_answer_streams_via_draft(registry, dispatcher):
         assert len(typed) >= 3 and typed[0].startswith("BTC")  # текст идёт прямо из модели
         assert_growing(typed)
         assert not any(t.endswith("▍") for t in typed)  # черновик анимирует сам — без курсора
-        photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
-        assert photo.caption is None
-        final = session.last()
-        assert final.text.startswith("BTC держится у <b>$100K</b>")
-        assert "📋 Подробно" in session.buttons(final)
-        assert not any(isinstance(r, (EditMessageCaption, EditMessageText)) for r in session.requests)
+        photo = session.requests[-1]  # картинка — последней, когда ИИ дописал
+        assert isinstance(photo, SendPhoto) and photo.caption.startswith("BTC держится у <b>$100K</b>")
+        assert "📋 Подробно" in session.buttons(photo)
+        assert not any(isinstance(r, (SendMessage, EditMessageCaption, EditMessageText)) for r in session.requests)
     finally:
         await svc.db.close()
 

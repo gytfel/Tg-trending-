@@ -116,11 +116,11 @@ def make_live(card_style=True):
     return live, log, bot, clock
 
 
-async def test_live_card_then_text_in_draft():
+async def test_live_text_in_draft_then_card_with_caption():
     live, log, bot, clock = make_live()
     await live.begin(CARD, "🐝 Рой: 🟢 2\n\n", "")
     assert live.mode == "draft" and live.draft_card
-    assert log == [("photo", None, None)]  # картинка сразу, без подписи
+    assert log == []  # картинка — только когда текст дописан
     clock.t += 1
     await live.update("BTC <b>держится</b>")
     clock.t += 0.1
@@ -130,7 +130,26 @@ async def test_live_card_then_text_in_draft():
     texts = [c["text"] for c in bot.calls]
     assert texts == ["🐝 Рой: 🟢 2\n\nBTC <b>держится</b>", "🐝 Рой: 🟢 2\n\nBTC <b>держится</b> у $100K"]
     sent = await live.finish("🐝 Рой: 🟢 2\n\nBTC <b>держится</b> у $100K.", "весь отчёт", "KB")
-    assert log[-1] == ("new", "🐝 Рой: 🟢 2\n\nBTC <b>держится</b> у $100K.", "KB") and sent.name == "new"
+    assert log == [("photo", "🐝 Рой: 🟢 2\n\nBTC <b>держится</b> у $100K.", "KB")] and sent.name == "photo"
+
+
+async def test_live_long_text_goes_under_the_card():
+    live, log, _, _ = make_live()
+    await live.begin(CARD)
+    await live.finish("слово " * 400, "отчёт", "KB")  # длиннее подписи
+    assert log[0] == ("photo", None, None)  # картинка сверху
+    assert log[-1][0] == "new" and log[-1][2] == "KB"  # текст следом, кнопки на нём
+
+
+async def test_live_broken_card_sends_text(monkeypatch):
+    def broken(*a, **kw):
+        raise OSError("нет шрифта")
+
+    monkeypatch.setattr("bot.handlers.live.render", broken)
+    live, log, _, _ = make_live()
+    await live.begin(CARD)
+    await live.finish("Короткий вывод.", "отчёт", "KB")
+    assert log == [("new", "Короткий вывод.", "KB")]
 
 
 async def test_live_text_report_in_draft():
