@@ -324,7 +324,7 @@ async def test_skill_creation_flow_and_usage(env):
     assert "📘 тейки" in session.buttons()
 
     await feed(msg("разбери BTC, навык тейки"))
-    assert "Навыки применяются в ИИ-выводе" in session.last().text  # без ключа Claude
+    assert "Твои навыки применяются в ИИ-выводе" in session.last().text  # без ключа ИИ
 
 
 async def test_skill_cancel(env):
@@ -786,3 +786,48 @@ async def test_no_drafts_in_groups(registry, dispatcher):
         assert photo.chat_id == GROUP.id and photo.reply_parameters is not None
     finally:
         await svc.db.close()
+
+
+# --- встроенные навыки: работают без ключа ИИ ---------------------------------------------------
+
+
+async def test_builtin_skill_without_ai_in_card(card_env):
+    session, feed, svc = card_env
+    await feed(msg("разбери BTC навык риск депозит 2000 риск 2% стоп 5%"))
+    photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+    cap = photo.caption.replace(" ", " ")
+    assert cap.startswith("<b>Bitcoin $100 000</b>")  # строка с ценой, дальше — навык
+    assert "⚖️ <b>Риск · BTC</b>" in cap and "позиция <b>$800</b>" in cap
+    assert (await svc.quota.status(UID)).used == 1
+    await feed(cb("rp:details", message_id=max(svc.reports)[1]))
+    assert "⚖️ <b>Риск · BTC</b>" in session.last().text  # и в подробном отчёте
+
+
+async def test_builtin_skill_works_even_with_own_skill_of_same_name(env):
+    session, feed, svc = env
+    await svc.db.add_skill(UID, "Новости", "только про ETF")  # свой навык — для ИИ, без ключа не работает
+    await feed(msg("разбери BTC навык новости"))
+    text = session.last().text
+    assert "📰 <b>Новости · BTC</b>" in text
+    assert "Твои навыки применяются" not in text  # встроенный посчитан — подсказка про ключ не нужна
+
+
+async def test_builtin_skill_by_hashtag(env):
+    session, feed, _ = env
+    await feed(msg("BTC #перегрев"))
+    assert "🌡 <b>Перегрев · BTC</b>" in session.last().text
+
+
+async def test_skills_screen_lists_builtin(env):
+    session, feed, _ = env
+    await feed(cb("nav:skills"))
+    text = session.last().text
+    for name in ("новости", "перегрев", "риск", "арбитраж", "коротко", "скам-чек"):
+        assert f"<b>{name}</b>" in text
+
+
+async def test_builtin_skill_without_coin_is_about_market(card_env):
+    session, feed, _ = card_env
+    await feed(msg("навык коротко"))
+    photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+    assert "⚡ <b>Коротко · рынок</b>" in photo.caption

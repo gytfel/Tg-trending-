@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from bot.db import Skill, User
 from bot.formatting import esc, esc_attr, plural, progress_bar
+from bot.services import skills_builtin
 from bot.services.quota import QuotaStatus
 from bot.sources.base import CATEGORY_META, Category
 
@@ -55,10 +56,16 @@ def analyze_screen(hours: int, has_fallback: bool) -> str:
 
 
 def skills_screen(skills: list[Skill], limit: int) -> str:
+    builtin = "\n".join(f"{b.icon} <b>{esc(b.key)}</b> — {esc(b.about)}" for b in skills_builtin.ALL)
     text = (
         "🧠 <b>Навыки</b>\n\n"
-        "Сохрани свои правила или шаблон один раз — и зови по имени в вопросе.\n"
-        "<i>Например: «разбери BTC, навык тейки»</i>"
+        "Навык подстраивает ответ под задачу. Зови по имени в вопросе: "
+        "<i>«разбери BTC навык перегрев»</i> или <i>#перегрев</i>.\n\n"
+        "<b>Встроенные</b> — бот считает сам, работают и без ключа ИИ:\n"
+        f"{builtin}\n"
+        "<i>Для «риска» можно указать цифры: «BTC навык риск депозит 2000 риск 2% стоп 5%».</i>\n\n"
+        "<b>Свои</b> — твои правила или шаблон ответа для ИИ (нужен ключ ИИ). "
+        "Свой навык с именем встроенного заменит его инструкцию для ИИ."
     )
     if skills:
         text += f"\n\nТвои навыки: {len(skills)} из {limit}"
@@ -190,7 +197,7 @@ HELP_SKILLS = (
     "📰 Новости и соцсети — 30+ лент, Reddit, 4chan, StockTwits\n"
     "🐝 Рой агентов — ИИ-специалисты + главный аналитик\n"
     "🔔 Слежки — напишу, когда цена дойдёт до уровня\n"
-    "🧠 Навыки — твои правила и шаблоны ответа"
+    "🧠 Навыки — новости, перегрев, риск, арбитраж, коротко, скам-чек и твои правила"
 )
 
 HELP_EXAMPLES = (
@@ -199,7 +206,8 @@ HELP_EXAMPLES = (
     "<code>сравни ARB и OP</code>\n"
     "<code>0x6982508145454Ce325dDbE47a25d4ec3d2311933</code> — проверка на скам\n"
     "<code>что сейчас на рынке?</code>\n"
-    "<code>разбери SOL, навык тейки</code>\n"
+    "<code>разбери BTC навык перегрев</code>\n"
+    "<code>SOL навык риск депозит 2000 риск 2%</code>\n"
     "<code>BTC &gt; 120000</code> — в разделе 🔔 Слежки"
 )
 

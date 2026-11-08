@@ -188,3 +188,17 @@ async def test_llm_verdict_is_used_and_escaped(registry):
     assert ctx["assets"][0]["symbol"] == "BTC" and ctx["assets"][0]["price_usd"] == pytest.approx(
         100100
     )  # только Binance
+
+
+async def test_builtin_skill_goes_to_ai_with_bot_numbers(registry):
+    from bot.services import skills_builtin
+
+    reg = small_registry(registry, ["binance", "coingecko"])
+    llm = StubLLM()
+    q = parse_query("BTC навык риск депозит 2000 риск 2%", skills_builtin.names())
+    res = await Analyzer(btc_http(), reg, llm, deadline=3).analyze(q, [])
+    _, _, skills = llm.seen
+    assert [s.name for s in skills] == ["риск"]
+    assert skills[0].content.startswith("Помоги с риск-менеджментом") and "Депозит $2" in skills[0].content
+    assert "⚖️ <b>Риск · BTC</b>" in res.text and "🤖 <b>Вывод</b> · навык: риск" in res.text
+    assert res.caption.startswith("🧠 Навык: риск")  # с ИИ подпись пишет модель

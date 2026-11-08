@@ -1,0 +1,737 @@
+"""Встроенные навыки — работают и без ключа ИИ.
+
+Свои навыки пользователя — это текст для промпта ИИ: без ключа они ничего не
+меняют. Встроенные бот считает сам по собранным данным: новости и их тон,
+перегрев деривативов, размер позиции под риск, разница цен между биржами,
+вывод в три строки, скам-чек токена. Вызов такой же, как у своих:
+«разбери BTC навык перегрев» или «#перегрев».
+
+С ключом ИИ навык ещё и уходит в промпт: инструкция + цифры, которые посчитал
+бот, — модель опирается на них, а не считает заново. Если у пользователя есть
+свой навык с тем же именем, в промпт идёт его текст (плюс те же цифры).
+"""
+
+from __future__ import annotations
+
+import html
+import re
+import statistics
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+
+from bot.db import Skill
+from bot.formatting import ago, esc, esc_attr, fmt_big, fmt_pct, fmt_price, html_prefix, plural
+from bot.services.prose import visible_len
+from bot.services.report import merge_security, rule_verdict, social_line
+from bot.sources.collector import Snapshot
+
+FEES_PCT = 0.3  # две сделки по ~0.1% + вывод: ниже этой разницы арбитража нет
+MIN_VOLUME = 50_000  # биржи с меньшим объёмом в арбитраже не учитываем — цена там случайная
+CAPTION_ROOM = 1000
+_TAG = re.compile(r"<[^>]+>")
+
+
+@dataclass(frozen=True, slots=True)
+class SkillInput:
+    kind: str  # asset | contract | compare | overview
+    snaps: list[Snapshot]  # найденные монеты (для обзора рынка — пусто)
+    g: Snapshot | None = None  # общий фон рынка
+    text: str = ""  # вопрос + тексты своих навыков: оттуда берём депозит, риск, стоп
+
+
+@dataclass(frozen=True, slots=True)
+class BuiltinSkill:
+    key: str
+    icon: str
+    about: str  # одна строка для экрана «Навыки»
+    prompt: str  # инструкция для ИИ
+    render: Callable[[SkillInput], str]
+    aliases: tuple[str, ...] = ()
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return (self.key, *self.aliases)
+
+
+# --- общее -------------------------------------------------------------------------------------
+
+
+def _sym(s: Snapshot) -> str:
+    a = s.asset
+    return esc((a.symbol or a.name or "токен") if a else "токен")
+
+
+def _title(icon: str, name: str, s: Snapshot | None = None) -> str:
+    return f"{icon} <b>{name}" + (f" · {_sym(s)}" if s is not None else "") + "</b>"
+
+
+def _need_coin(icon: str, name: str, key: str) -> str:
+    return f"{icon} <b>{name}</b>\nНавык работает для монеты — например: «разбери BTC навык {key}»."
+
+
+def _num(m) -> float | None:
+    return float(m.value) if m is not None and isinstance(m.value, (int, float)) else None
+
+
+def daily_move(s: Snapshot) -> float | None:
+    """Обычный ход цены за сутки, % — медиана изменений за 24 ч по часовым свечам."""
+    ser = s.series()
+    if ser is None or ser.interval != "1h" or len(ser.points) < 48:
+        return None
+    p = ser.points
+    moves = [abs(p[i] / p[i - 24] - 1) * 100 for i in range(24, len(p)) if p[i - 24]]
+    return statistics.median(moves) if moves else None
+
+
+def week_range(s: Snapshot) -> tuple[float, float] | None:
+    ser = s.series()
+    if ser is None or len(ser.points) < 24:
+        return None
+    return min(ser.points), max(ser.points)
+
+
+def _money(x: float) -> str:
+    """Суммы позиций — без копеек: $1 600, $727, $8.50."""
+    return fmt_price(x) if x >= 1000 else f"${x:.0f}" if x >= 10 else f"${x:.2f}"
+
+
+def _liquid_quotes(s: Snapshot) -> list:
+    """Котировки бирж с заметным объёмом и без выбросов (>20% от медианы)."""
+    qs = [(n, q) for n, q in s.quotes() if q.price and (q.volume_24h or 0) >= MIN_VOLUME]
+    if len(qs) >= 2:
+        med = statistics.median(q.price for _, q in qs)
+        qs = [(n, q) for n, q in qs if abs(q.price - med) / med < 0.2]
+    return qs
+
+
+def _units(x: float) -> str:
+    if x >= 100:
+        return f"{x:,.0f}".replace(",", " ")
+    if x >= 1:
+        return f"{x:.2f}"
+    return f"{x:.4g}"
+
+
+# --- 📰 новости ------------------------------------------------------------------------------------
+
+_BULL = re.compile(
+    r"(?i)(?<!\w)(surg|soar|rall|jump|gain|climb|rise|rises|rising|record|all-time high|bull|inflow|approv|"
+    r"breakout|adopt|рост|раст[её]т|взл[её]т|ралли|рекорд|приток|одобр)"
+)
+_BEAR = re.compile(
+    r"(?i)(?<!\w)(plung|drop|fall|fell|slump|crash|sell-off|selloff|dump|bear|outflow|hack|exploit|lawsuit|"
+    r"sues?\b|sued\b|bans?\b|liquidat|warn|declin|slid|tumbl|sink|sank|паден|обвал|отток|взлом|запрет|иск\b|"
+    r"ликвидац|снижен|упал|пада)"
+)
+
+
+def tone(title: str) -> int:
+    """+1 — заголовок про рост, −1 — про падение, 0 — нейтральный (по ключевым словам)."""
+    up, down = bool(_BULL.search(title)), bool(_BEAR.search(title))
+    return 1 if up and not down else -1 if down and not up else 0
+
+
+def _headlines(items) -> list[str]:
+    lines = []
+    for n in items:
+        t = n.title if len(n.title) <= 100 else n.title[:97] + "…"
+        meta = ", ".join(x for x in (esc(n.source), ago(n.published)) if x)
+        title = f'<a href="{esc_attr(n.url)}">{esc(t)}</a>' if n.url else esc(t)
+        lines.append(f"• {title}" + (f" — {meta}" if meta else ""))
+    return lines
+
+
+def _tone_line(items) -> str:
+    tones = [tone(n.title) for n in items]
+    up, down = tones.count(1), tones.count(-1)
+    word = "скорее позитивный" if up > down else "скорее негативный" if down > up else "нейтральный"
+    return f"Тон заголовков: 🟢 {up} · 🔴 {down} · ⚪ {len(tones) - up - down} — {word}."
+
+
+def _fear_greed(g: Snapshot | None) -> str:
+    if g is None or (m := g.metric("fear_greed")) is None:
+        return ""
+    label = (m.note or "").split(";")[0].lower()
+    return f"Страх и жадность <b>{esc(m.value)}</b>" + (f" — {esc(label)}" if label else "") + "."
+
+
+def render_news(inp: SkillInput) -> str:
+    if not inp.snaps:
+        items = inp.g.news(5) if inp.g else []
+        lines = ["📰 <b>Новости рынка</b>"]
+        if not items:
+            return lines[0] + "\nСвежих новостей не нашлось."
+        return "\n".join([*lines, *_headlines(items), _tone_line(items), _fear_greed(inp.g)]).strip()
+    blocks = []
+    per = 5 if len(inp.snaps) == 1 else 2
+    for s in inp.snaps:
+        items = s.news(per)
+        lines = [_title("📰", "Новости", s)]
+        if items:
+            lines += [*_headlines(items), _tone_line(items)]
+        else:
+            lines.append(f"Свежих новостей именно про {_sym(s)} за 3 дня не нашлось.")
+            market = inp.g.news(3) if inp.g and len(inp.snaps) == 1 else []
+            if market:
+                lines += ["Что пишут о рынке:", *_headlines(market)]
+        if len(inp.snaps) == 1:
+            lines += [social_line(s), _fear_greed(inp.g)]
+        blocks.append("\n".join(x for x in lines if x))
+    return "\n\n".join(blocks)
+
+
+# --- 🌡 перегрев ------------------------------------------------------------------------------------
+
+_VENUE = re.compile(r"\s+(Futures|Perpetual|Swap)$")
+_LS = (("ls_binance", "Binance"), ("ls_bybit", "Bybit"), ("ls_okx", "OKX"))
+_HEAT = {
+    3: "🔴 лонги перегреты — высокий риск лонг-сквиза (резкого выноса вниз).",
+    2: "🟠 лонги в перевесе — риск выноса вниз средний.",
+    1: "🟡 лёгкий перевес лонгов, перегрева нет.",
+    0: "🟢 позиции сбалансированы, перекоса нет.",
+    -1: "🟡 лёгкий перевес шортов, перегрева нет.",
+    -2: "🟠 шорты в перевесе — возможен шорт-сквиз (резкий вынос вверх).",
+    -3: "🔴 шорты перегреты — высокий риск шорт-сквиза.",
+}
+
+
+def heat_score(s: Snapshot) -> int | None:
+    """>0 — перегреты лонги, <0 — шорты; None — нет данных по фьючерсам."""
+    f = s.funding()
+    ls = [v for key, _ in _LS if (v := _num(s.metric(key))) is not None]
+    if f is None and not ls:
+        return None
+    score = 0
+    if f is not None:
+        v = f[0]
+        score += 2 if v >= 0.05 else 1 if v >= 0.02 else -2 if v <= -0.03 else -1 if v <= -0.005 else 0
+    if ls:
+        r = statistics.mean(ls)
+        score += 2 if r >= 3.5 else 1 if r >= 2.5 else -2 if r <= 0.6 else -1 if r <= 0.8 else 0
+    return max(-3, min(3, score))
+
+
+def _heat_full(s: Snapshot) -> str:
+    head = _title("🌡", "Перегрев", s)
+    score = heat_score(s)
+    if score is None:
+        return head + "\nФьючерсов по монете на крупных биржах нет — оценить перегрев не по чему."
+    lines = [head]
+    ders = sorted(
+        ((n, d.funding_8h) for n, d in s.derivatives() if d.funding_8h is not None), key=lambda x: x[1], reverse=True
+    )
+    if ders:
+        avg = statistics.mean(v for _, v in ders)
+        line = f"Фандинг в среднем <b>{fmt_pct(avg, digits=4)}</b>/8ч на {len(ders)} {plural(len(ders), 'бирже', 'биржах', 'биржах')}"
+        if len(ders) >= 4:
+            top = ", ".join(f"{esc(_VENUE.sub('', n))} {fmt_pct(v, digits=4)}" for n, v in ders[:2])
+            low = ", ".join(f"{esc(_VENUE.sub('', n))} {fmt_pct(v, digits=4)}" for n, v in ders[::-1][:2])
+            line += f": выше всех — {top}; ниже — {low}"
+        lines.append(line + ".")
+    bits = []
+    if oi := s.open_interest():
+        bits.append(f"открытый интерес <b>{fmt_big(oi[0])}</b>")
+    ls = [f"{label} {v}" for key, label in _LS if (v := _num(s.metric(key))) is not None]
+    if ls:
+        bits.append("L/S аккаунтов: " + ", ".join(ls))
+    if (v := _num(s.metric("ls_binance_top"))) is not None:
+        bits.append(f"топ-трейдеры Binance {v}")
+    if bits:
+        lines.append(bits[0][:1].upper() + "; ".join(bits)[1:] + ".")
+    flow = []
+    if (v := _num(s.metric("taker_binance"))) is not None:
+        side = "покупатели активнее" if v >= 1.05 else "продавцы активнее" if v <= 0.95 else "покупки и продажи вровень"
+        flow.append(f"taker buy/sell за час {v} — {side}")
+    if (v := _num(s.metric("put_call"))) is not None:
+        flow.append(f"опционы Put/Call {v}" + (" — спрос на защиту от падения" if v >= 1 else ""))
+    if (v := _num(s.metric("dvol"))) is not None:
+        flow.append(f"DVOL {v}")
+    if flow:
+        lines.append(flow[0][:1].upper() + "; ".join(flow)[1:] + ".")
+    lines.append("Итог: " + _HEAT[score])
+    return "\n".join(lines)
+
+
+def render_overheat(inp: SkillInput) -> str:
+    if not inp.snaps:
+        return _need_coin("🌡", "Перегрев", "перегрев")
+    if len(inp.snaps) == 1:
+        return _heat_full(inp.snaps[0])
+    lines = ["🌡 <b>Перегрев</b>"]
+    for s in inp.snaps:
+        score = heat_score(s)
+        if score is None:
+            lines.append(f"• {_sym(s)}: фьючерсов нет")
+            continue
+        f = s.funding()
+        bits = [f"фандинг {fmt_pct(f[0], digits=4)}" if f else ""]
+        ls = [v for key, _ in _LS if (v := _num(s.metric(key))) is not None]
+        if ls:
+            bits.append(f"L/S {statistics.mean(ls):.2f}")
+        lines.append(f"• {_sym(s)}: " + ", ".join(b for b in bits if b) + f" → {_HEAT[score]}")
+    return "\n".join(lines)
+
+
+# --- ⚖️ риск ------------------------------------------------------------------------------------
+
+# «2000», «2 000», «2,000», «2.000», «1.5»; «2к» / «2k» — тысячи
+_AMOUNT = r"(\d{1,3}(?:[   ]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)*)"
+_DEPOSIT = re.compile(
+    rf"(?i)(?<!\w)(?:депо\w*|deposit|баланс\w*|капитал\w*|банк)\s*[:=—-]?\s*\$?\s*{_AMOUNT}\s*(k|к|тыс)?(?!\w)"
+)
+_RISK = re.compile(r"(?i)(?<!\w)(?:риск\w*|risk)\s*(?:на\s+сделку\s*)?[:=—-]?\s*(\d+(?:[.,]\d+)?)\s*%")
+_STOP = re.compile(r"(?i)(?<!\w)(?:стоп\w*|stop|sl)\s*(?:-?лосс\w*\s*)?[:=—-]?\s*[-−]?\s*(\d+(?:[.,]\d+)?)\s*%")
+
+
+def _amount(raw: str) -> float | None:
+    x = re.sub(r"[   ]", "", raw)
+    if "," in x and "." in x:
+        x = x.replace(",", "")
+    elif re.fullmatch(r"\d{1,3}([,.]\d{3})+", x):  # 2,000 / 2.000 — разделители тысяч
+        x = re.sub(r"[,.]", "", x)
+    else:
+        x = x.replace(",", ".")
+    try:
+        return float(x)
+    except ValueError:
+        return None
+
+
+def parse_risk(text: str) -> tuple[float | None, float | None, float | None]:
+    """(депозит $, риск на сделку %, стоп %) из текста: «депозит 2000 риск 2% стоп 5%»."""
+    dep = risk = stop = None
+    if (m := _DEPOSIT.search(text)) and (dep := _amount(m.group(1))) is not None:
+        if m.group(2):
+            dep *= 1000
+        dep = dep if dep > 0 else None
+    if m := _RISK.search(text):
+        risk = float(m.group(1).replace(",", "."))
+        risk = risk if 0 < risk <= 20 else None
+    if m := _STOP.search(text):
+        stop = float(m.group(1).replace(",", "."))
+        stop = stop if 0 < stop < 90 else None
+    return dep, risk, stop
+
+
+def _half(x: float) -> float:
+    return max(0.5, round(x * 2) / 2)
+
+
+def default_stops(move: float | None) -> list[float]:
+    if move is None:
+        return [3.0, 5.0, 8.0]
+    out: list[float] = []
+    for k in (1, 2, 3):  # близкий, обычный, широкий — от обычного дневного хода
+        st = _half(move * k)
+        if st not in out:
+            out.append(st)
+    return out
+
+
+def _liquidity(s: Snapshot, size: float) -> str:
+    dex = s.dex_pairs()
+    if s.asset and s.asset.contract and dex:
+        liq = sum(p.liquidity_usd or 0 for p in dex)
+        if liq and size > liq * 0.02:
+            return f"⚠️ Позиция больше 2% ликвидности пулов ({fmt_big(liq)}) — проскальзывание будет заметным, входи частями."
+        return f"Ликвидность пулов {fmt_big(liq)} — такой объём цену почти не сдвинет."
+    m = s.best_market()
+    vol = (m.volume_24h if m else None) or s.cex_volume()
+    prices = [q.price for _, q in _liquid_quotes(s)]
+    spread = (max(prices) - min(prices)) / min(prices) * 100 if len(prices) >= 2 else 0
+    if spread >= 0.5:
+        return f"⚠️ Цены на биржах расходятся на {spread:.2f}% — входи там, где цена плотнее."
+    if vol and size > vol * 0.01:
+        return f"⚠️ Объём за сутки всего {fmt_big(vol)} — крупный вход сдвинет цену, входи частями."
+    return f"Ликвидность в порядке: объём за сутки {fmt_big(vol)}." if vol else ""
+
+
+def _risk_full(s: Snapshot, text: str) -> str:
+    price = s.price()
+    head = _title("⚖️", "Риск", s)
+    if not price:
+        return head + "\nНет цены — посчитать позицию не по чему."
+    dep, risk, stop = parse_risk(text)
+    given = dep is not None
+    dep, risk = dep or 1000.0, risk or 1.0
+    move = daily_move(s)
+    stops = [stop] if stop else default_stops(move)
+    risk_usd = dep * risk / 100
+    lines = [
+        head + f" {fmt_price(price)}",
+        f"Депозит <b>{_money(dep)}</b>, риск на сделку {risk:g}% = <b>{_money(risk_usd)}</b>.",
+    ]
+    biggest = 0.0
+    for st in stops:
+        size = risk_usd / (st / 100)
+        biggest = max(biggest, size)
+        line = (
+            f"• стоп −{st:g}% ({fmt_price(price * (1 - st / 100))}): позиция <b>{_money(size)}</b>"
+            f" ≈ {_units(size / price)} {_sym(s)}"
+        )
+        if size > dep:
+            line += f" — нужно плечо ×{size / dep:.1f}"
+        lines.append(line)
+    if move is not None:
+        lines.append(f"Обычный ход {_sym(s)} за сутки — около {move:.1f}%: стоп ближе часто выбивает шумом.")
+    lines.append(_liquidity(s, biggest))
+    if not given:
+        lines.append(
+            "<i>Депозит не указан — считаю на $1 000. Напиши, например: «BTC навык риск депозит 2000 риск 2% стоп 5%».</i>"
+        )
+    return "\n".join(x for x in lines if x)
+
+
+def render_risk(inp: SkillInput) -> str:
+    if not inp.snaps:
+        return _need_coin("⚖️", "Риск", "риск")
+    if len(inp.snaps) == 1:
+        return _risk_full(inp.snaps[0], inp.text)
+    dep, risk, stop = parse_risk(inp.text)
+    dep, risk = dep or 1000.0, risk or 1.0
+    lines = [f"⚖️ <b>Риск</b> · депозит {_money(dep)}, риск {risk:g}% = {_money(dep * risk / 100)}"]
+    for s in inp.snaps:
+        price = s.price()
+        if not price:
+            continue
+        st = stop or _half((daily_move(s) or 2.5) * 2)
+        size = dep * risk / 100 / (st / 100)
+        lines.append(
+            f"• {_sym(s)}: стоп −{st:g}% ({fmt_price(price * (1 - st / 100))}) → позиция <b>{_money(size)}</b>"
+        )
+    return "\n".join(lines)
+
+
+# --- 💱 арбитраж ------------------------------------------------------------------------------------
+
+
+def _usd(pair: str | None) -> bool:
+    return bool(pair) and pair.upper().endswith("/USD")
+
+
+def _arb(s: Snapshot) -> str:
+    head = _title("💱", "Арбитраж", s)
+    qs = _liquid_quotes(s)
+    if len(qs) < 2:
+        return head + "\nМонета торгуется меньше чем на двух крупных биржах — сравнивать не с чем."
+    qs.sort(key=lambda x: x[1].price)
+
+    def show(items) -> str:
+        return ", ".join(f"{esc(n)} {fmt_price(q.price)}" + (" (USD)" if _usd(q.pair) else "") for n, q in items)
+
+    lo, hi = qs[0][1], qs[-1][1]
+    diff = (hi.price - lo.price) / lo.price * 100
+    lines = [head, f"Дешевле всего: {show(qs[:2])}.", f"Дороже всего: {show(qs[::-1][:2])}."]
+    net = diff - FEES_PCT
+    if net > 0.05:
+        lines.append(
+            f"Разница <b>{diff:.2f}%</b> — после комиссий (~{FEES_PCT}%: две сделки и вывод) остаётся около "
+            f"{net:.2f}%. Учти время перевода между биржами и лимиты вывода."
+        )
+    else:
+        lines.append(f"Разница <b>{diff:.2f}%</b> — меньше комиссий (~{FEES_PCT}%), арбитража нет.")
+    if _usd(lo.pair) != _usd(hi.pair):
+        lines.append("Часть разницы — курс USDT к доллару: где-то пара к USD, где-то к USDT.")
+    dex = [p for p in s.dex_pairs() if p.price_usd and (p.liquidity_usd or 0) >= 100_000]
+    if dex:
+        med = statistics.median(q.price for _, q in qs)
+        p = dex[0]
+        lines.append(
+            f"На DEX ({esc(p.dex)}, {esc(p.chain)}) {fmt_price(p.price_usd)} — {fmt_pct((p.price_usd / med - 1) * 100)} к биржам."
+        )
+    lines.append(f"Учтено бирж: {len(qs)} (с объёмом от $50K за сутки).")
+    return "\n".join(lines)
+
+
+def render_arbitrage(inp: SkillInput) -> str:
+    if not inp.snaps:
+        return _need_coin("💱", "Арбитраж", "арбитраж")
+    return "\n\n".join(_arb(s) for s in inp.snaps)
+
+
+# --- ⚡ коротко ------------------------------------------------------------------------------------
+
+
+def _range_phrase(s: Snapshot) -> str:
+    rng, price = week_range(s), s.price()
+    if not rng or not price or rng[1] <= rng[0]:
+        return ""
+    pos = (price - rng[0]) / (rng[1] - rng[0])
+    where = "у верхней границы" if pos >= 0.8 else "у нижней границы" if pos <= 0.2 else "в середине"
+    return f"цена {where} недельного диапазона"
+
+
+def _short_coin(s: Snapshot, g: Snapshot | None) -> str:
+    m = s.best_market()
+    what = [f"{fmt_pct(s.change_24h())} за сутки"]
+    if m and m.change_7d is not None:
+        what.append(f"{fmt_pct(m.change_7d, digits=1)} за неделю")
+    if rp := _range_phrase(s):
+        what.append(rp)
+    tips = rule_verdict([s], g)
+    tip = tips[0].split(": ", 1)[1] if ": " in tips[0] else tips[0]
+    rng = week_range(s)
+    if rng:
+        watch = f"выше {fmt_price(rng[1])} — сила, ниже {fmt_price(rng[0])} — слабость (границы недели)."
+    elif m and m.ath_change is not None:
+        watch = f"до ATH {abs(m.ath_change):.0f}% — смотри, удержится ли рост."
+    else:
+        watch = "объёмы и реакцию на новости."
+    return "\n".join(
+        [
+            _title("⚡", "Коротко", s),
+            "📍 Что происходит: " + ", ".join(what) + ".",
+            "⚠️ Что важно: " + esc(tip[:1].upper() + tip[1:]),
+            "👀 За чем следить: " + watch,
+        ]
+    )
+
+
+def _short_market(g: Snapshot | None) -> str:
+    if g is None:
+        return "⚡ <b>Коротко</b>\nДанных по рынку нет."
+    what = []
+    if (m := g.metric("total_mcap")) and isinstance(m.value, (int, float)):
+        what.append(
+            f"капа {fmt_big(float(m.value))}" + (f" ({fmt_pct(m.change, digits=1)})" if m.change is not None else "")
+        )
+    if (m := g.metric("btc_dominance")) and m.value:
+        what.append(f"доминация BTC {esc(m.value)}%")
+    mood = _fear_greed(g) or "Явных перекосов нет."
+    leaders = ""
+    for key, label in (("binance_gainers", "лидеры роста Binance"), ("cg_trending", "в трендах CoinGecko")):
+        if m := g.metric(key):
+            leaders = f"{label} — {esc(m.value)}."
+            break
+    return "\n".join(
+        [
+            "⚡ <b>Коротко · рынок</b>",
+            "📍 Что происходит: " + (", ".join(what) + "." if what else "данных мало."),
+            "⚠️ Настроение: " + mood,
+            "👀 За чем следить: " + (leaders or "доминацию BTC и объёмы."),
+        ]
+    )
+
+
+def render_short(inp: SkillInput) -> str:
+    if not inp.snaps:
+        return _short_market(inp.g)
+    return "\n\n".join(_short_coin(s, inp.g) for s in inp.snaps)
+
+
+# --- 🛡 скам-чек ------------------------------------------------------------------------------------
+
+_CRIT = re.compile(
+    r"(?i)honeypot|нельзя продать|продать нельзя|менять балансы|балансы можно менять|скрытый владелец|"
+    r"заморозить|нельзя переводить"
+)
+_SELL_TAX = re.compile(r"налог на продажу (\d+)%")
+
+
+def severity(flag: str) -> int:
+    """2 — критично, 1 — настораживает."""
+    if flag.startswith("🔴") or _CRIT.search(flag):
+        return 2
+    if (m := _SELL_TAX.search(flag)) and int(m.group(1)) >= 30:
+        return 2
+    return 1
+
+
+def _scam(s: Snapshot) -> str:
+    head = _title("🛡", "Скам-чек", s)
+    sec = s.security()
+    dex = s.dex_pairs()
+    if not sec and not (s.asset and s.asset.contract):
+        m, qs = s.best_market(), s.quotes()
+        if qs or (m and m.market_cap and m.market_cap >= 1e9):
+            where = f"торгуется на {len(qs)} {plural(len(qs), 'бирже', 'биржах', 'биржах')}" if qs else "крупная монета"
+            cap = f", капа {fmt_big(m.market_cap)}" if m and m.market_cap else ""
+            return (
+                f"{head}\n{_sym(s)} {where}{cap} — риск здесь рыночный, а не скам. "
+                "Для мемкоинов и новых токенов пришли адрес контракта: «0x… навык скам-чек»."
+            )
+    risk, flags, holders = merge_security(sec)
+    found = [(severity(f), re.sub(r"^[🔴🟠🟡⚪]\s*", "", f)) for f in flags]
+    liq = sum(p.liquidity_usd or 0 for p in dex)
+    if dex and liq < 50_000:
+        found.append((1, f"ликвидность всего {fmt_big(liq)} — цену легко двигать"))
+    oldest = min((p.created_at for p in dex if p.created_at), default=None)
+    if oldest and datetime.now(UTC) - oldest < timedelta(days=3):
+        found.append((1, f"пулу всего {ago(oldest)} — токен совсем новый"))
+    if (top10 := _num(s.metric("top10_share"))) is not None and top10 >= 50:
+        found.append((1, f"топ-10 кошельков держат {top10:g}%"))
+    best = dex[0] if dex else None
+    if (
+        best
+        and best.buys_24h
+        and best.sells_24h is not None
+        and best.buys_24h >= 50
+        and best.sells_24h * 10 < best.buys_24h
+    ):
+        found.append((2, "продаж почти нет при куче покупок — похоже на honeypot"))
+    found.sort(key=lambda x: -x[0])
+    lines = [head]
+    if found:
+        lines.append("Флаги, от самых опасных:")
+        lines += [f"{'🔴' if sev == 2 else '🟠'} {esc(text)}" for sev, text in found[:6]]
+    elif sec:
+        lines.append("Красных флагов по контракту, ликвидности и держателям не нашлось.")
+    if holders:
+        lines.append(f"Держателей: {holders}.")
+    crit = sum(1 for sev, _ in found if sev == 2)
+    soft = len(found) - crit
+    if risk == "high" or crit:
+        verdict = "🔴 не лезть."
+    elif risk == "medium" or soft >= 2:
+        verdict = "🟠 только на сумму, которую не жалко."
+    elif not sec:
+        verdict = "⚪ данных по контракту мало — проверь руками."
+    else:
+        verdict = "🟢 явных проблем нет."
+    lines.append("Вердикт: " + verdict)
+    lines.append("Проверь руками: код контракта на сканере, кто держит топ-кошельки, заблокирована ли ликвидность.")
+    return "\n".join(lines)
+
+
+def render_scam(inp: SkillInput) -> str:
+    if not inp.snaps:
+        return "🛡 <b>Скам-чек</b>\nПришли адрес токена — например: «0x… навык скам-чек»."
+    return "\n\n".join(_scam(s) for s in inp.snaps)
+
+
+# --- реестр ------------------------------------------------------------------------------------
+
+ALL: tuple[BuiltinSkill, ...] = (
+    BuiltinSkill(
+        "новости",
+        "📰",
+        "свежие заголовки по монете, их тон и настроение толпы",
+        "Сосредоточься на новостях и настроениях: что пишут о монете, что из этого уже в цене, какой тон у "
+        "заголовков и соцсетей. Назови 2–3 самые важные новости и как они могут повлиять на цену. Только то, "
+        "что есть в данных.",
+        render_news,
+        ("news",),
+    ),
+    BuiltinSkill(
+        "перегрев",
+        "🌡",
+        "кто перегрет — лонги или шорты: фандинг по биржам, OI, L/S, риск сквиза",
+        "Смотри только на деривативы: фандинг по биржам, открытый интерес, L/S, taker buy/sell, опционы. "
+        "Скажи, кто перегрет — лонги или шорты, и оцени риск сквиза (низкий/средний/высокий) с объяснением. "
+        "Без советов по входу.",
+        render_overheat,
+        ("фандинг",),
+    ),
+    BuiltinSkill(
+        "риск",
+        "⚖️",
+        "размер позиции под депозит и риск, стопы по волатильности",
+        "Помоги с риск-менеджментом по расчёту бота: депозит, риск на сделку, позиции для разных стопов. "
+        "Объясни, какой стоп разумен с учётом обычной волатильности монеты, и предупреди, если ликвидность "
+        "или спред мешают войти этим объёмом.",
+        render_risk,
+        ("позиция",),
+    ),
+    BuiltinSkill(
+        "арбитраж",
+        "💱",
+        "где монета дешевле и дороже, перекрывает ли разница комиссии",
+        "Оцени арбитраж между биржами по расчёту бота: где дешевле и где дороже, перекрывает ли разница "
+        "комиссии и время перевода. Если выгоды нет — так и скажи.",
+        render_arbitrage,
+    ),
+    BuiltinSkill(
+        "коротко",
+        "⚡",
+        "три строки: что происходит, что важно, за чем следить",
+        "Ответь очень коротко — ровно три строки: что происходит, что важно, за чем следить.",
+        render_short,
+    ),
+    BuiltinSkill(
+        "скам-чек",
+        "🛡",
+        "красные флаги токена и вердикт «не лезть / на мелочь / норм»",
+        "Оцени токен как охотник за скамом: красные флаги по контракту, ликвидности и держателям — от самого "
+        "опасного; вердикт одной строкой: 🔴 не лезть / 🟠 только на сумму, которую не жалко / 🟢 явных "
+        "проблем нет; в конце — что проверить руками.",
+        render_scam,
+        ("скам", "скамчек"),
+    ),
+)
+
+_BY_NAME = {n.casefold(): b for b in ALL for n in b.names}
+
+
+def get(name: str) -> BuiltinSkill | None:
+    return _BY_NAME.get(name.strip().casefold())
+
+
+def names(exclude: Iterable[str] = ()) -> list[str]:
+    """Все имена и синонимы встроенных навыков — кроме занятых своими навыками пользователя."""
+    taken = {n.casefold() for n in exclude}
+    return [n for b in ALL for n in b.names if n.casefold() not in taken]
+
+
+def find(found_names: Iterable[str]) -> list[BuiltinSkill]:
+    out: list[BuiltinSkill] = []
+    for n in found_names:
+        b = get(n)
+        if b is not None and b not in out:
+            out.append(b)
+    return out
+
+
+def run(skills: list[BuiltinSkill], inp: SkillInput) -> dict[str, str]:
+    """key → HTML-блок. Пустые блоки отбрасываем."""
+    return {b.key: block for b in skills if (block := b.render(inp))}
+
+
+def plain(text_html: str) -> str:
+    return html.unescape(_TAG.sub("", text_html))
+
+
+def for_ai(user: list[Skill], builtin: list[BuiltinSkill], blocks: dict[str, str]) -> list[Skill]:
+    """Навыки для промпта ИИ: свои как есть, встроенные — инструкция + цифры бота.
+
+    Свой навык с именем встроенного заменяет его инструкцию, но цифры бота к нему добавляются.
+    """
+
+    def with_facts(content: str, key: str) -> str:
+        facts = blocks.get(key)
+        if not facts:
+            return content
+        return f"{content}\n\nЦифры, которые посчитал бот (опирайся на них, не пересчитывай):\n{plain(facts)}"
+
+    out: list[Skill] = []
+    covered: set[str] = set()
+    for s in user:
+        b = get(s.name)
+        if b is None:
+            out.append(s)
+            continue
+        covered.add(b.key)
+        out.append(Skill(s.id, s.user_id, s.name, with_facts(s.content, b.key), s.created_at))
+    for b in builtin:
+        if b.key not in covered:
+            out.append(Skill(0, 0, b.key, with_facts(b.prompt, b.key), ""))
+    return out
+
+
+def caption(head: str, blocks: list[str], limit: int = CAPTION_ROOM) -> str:
+    """Подпись под карточкой без ИИ: строка с ценой + блоки навыков, сколько влезет в лимит Telegram."""
+    more = "\n\n<i>Остальное — в «📋 Подробно».</i>"
+    room = limit - visible_len(more)
+    out = [head] if head else []
+    dropped = False
+    for block in blocks:
+        if visible_len("\n\n".join([*out, block])) <= room:
+            out.append(block)
+            continue
+        dropped = True
+        left = room - visible_len("\n\n".join(out)) - 4
+        if left >= 200:  # не влез целиком — показываем начало
+            out.append(html_prefix(block, left) + " …")
+        break
+    text = "\n\n".join(out)
+    return text + more if dropped else text

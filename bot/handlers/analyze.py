@@ -28,7 +28,7 @@ from bot.handlers.live import LiveAnswer, send_card
 from bot.handlers.thinking import ThinkingMessage
 from bot.query_parser import parse_query
 from bot.render import Brand, render
-from bot.services import Services, report
+from bot.services import Services, report, skills_builtin
 from bot.services.prose import CAPTION_LIMIT, visible_len
 
 log = logging.getLogger(__name__)
@@ -165,7 +165,8 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
         return
 
     skills = await svc.db.list_skills(user_id)
-    parsed = parse_query(text, [s.name for s in skills])
+    own = [s.name for s in skills]
+    parsed = parse_query(text, own + skills_builtin.names(exclude=own))  # свои + встроенные навыки
     used_skills = [s for s in skills if s.name in parsed.skills]
 
     svc.busy.add(user_id)

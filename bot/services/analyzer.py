@@ -13,7 +13,7 @@ from bot.db import Skill
 from bot.formatting import esc, short_addr
 from bot.query_parser import ParsedQuery
 from bot.render import Card
-from bot.services import cards, prose, report, swarm
+from bot.services import cards, prose, report, skills_builtin, swarm
 from bot.services.llm import LLM, to_html
 from bot.services.progress import Progress
 from bot.services.swarm import Swarm
@@ -187,22 +187,36 @@ class Analyzer:
         progress = progress if progress is not None else Progress()
 
         targets = q.targets
+        # встроенные навыки (новости, перегрев, риск…) бот считает сам — они работают и без ИИ
+        builtins = skills_builtin.find(q.skills)
         ai_on = self.llm.enabled or (self.swarm is not None and self.swarm.enabled)
-        overview = not targets and (q.market or (ai_on and q.words >= 3))
+        # «навык новости» без монеты — про рынок в целом
+        overview = not targets and (q.market or bool(builtins) or (ai_on and q.words >= 3))
         if not targets and not overview:
             return AnalysisResult(kind="nothing", text="")
-        await progress.step("🧩", describe_task(q, skills))
+        skill_text = "\n".join([q.raw, *(s.content for s in skills)])  # депозит, риск, стоп для «риска»
+        await progress.step("🧩", describe_task(q, skills_builtin.for_ai(skills, builtins, {})))
 
         if overview:
             (g,) = await self._collect_all([(self.registry.for_overview(), None)], progress)
             body = report.overview_section(g)
             news = report.news_block(g, limit=5)
             card = cards.build_card("overview", [], g)
+            blocks = skills_builtin.run(builtins, skills_builtin.SkillInput("overview", [], g, skill_text))
+            ai_skills = skills_builtin.for_ai(skills, builtins, blocks)
             verdict, used, agents, ai_html = await self._verdict(
-                q, [], g, skills, progress, live=live, card=card, prefix=[body, news]
+                q, [], g, ai_skills, progress, live=live, card=card, prefix=[body, news, *blocks.values()]
             )
             text = "\n\n".join(
-                p for p in (body, news, verdict, report.footer(g.ok_count(), g.asked, time.monotonic() - t0)) if p
+                p
+                for p in (
+                    body,
+                    news,
+                    *blocks.values(),
+                    verdict,
+                    report.footer(g.ok_count(), g.asked, time.monotonic() - t0),
+                )
+                if p
             )
             return AnalysisResult(
                 kind="overview",
@@ -214,7 +228,7 @@ class Analyzer:
                 used_llm=used,
                 agents=agents,
                 card=card,
-                caption=self._caption("overview", [], g, ai_html, agents, skills),
+                caption=self._caption("overview", [], g, ai_html, agents, ai_skills, list(blocks.values())),
             )
 
         labels = ", ".join(v if k == "symbol" else short_addr(v) for k, v in targets)
@@ -246,8 +260,11 @@ class Analyzer:
 
         kind = "compare" if compare else ("contract" if assets[0].contract else "asset")
         card = cards.build_card(kind, found, g)
+        blocks = skills_builtin.run(builtins, skills_builtin.SkillInput(kind, found, g, skill_text))
+        sections.extend(blocks.values())
+        ai_skills = skills_builtin.for_ai(skills, builtins, blocks)
         verdict, used, agents, ai_html = await self._verdict(
-            q, found, g, skills, progress, live=live, card=card, prefix=list(sections)
+            q, found, g, ai_skills, progress, live=live, card=card, prefix=list(sections)
         )
         if verdict:
             sections.append(verdict)
@@ -270,7 +287,7 @@ class Analyzer:
             used_llm=used,
             agents=agents,
             card=card,
-            caption=self._caption(kind, found, g, ai_html, agents, skills),
+            caption=self._caption(kind, found, g, ai_html, agents, ai_skills, list(blocks.values())),
         )
 
     @staticmethod
@@ -296,8 +313,12 @@ class Analyzer:
         ai_html: str | None,
         agents: list[swarm.AgentResult],
         skills: list[Skill],
+        skill_blocks: list[str] | None = None,
     ) -> str:
-        """Живой текст под карточкой: ответ ИИ, а без него — связный текст по шаблону."""
+        """Живой текст под карточкой: ответ ИИ, а без него — связный текст по шаблону.
+
+        Без ИИ, но со встроенными навыками: строка с ценой + то, что посчитали навыки.
+        """
         head = cls._caption_head(agents, skills, ai=bool(ai_html))
         if ai_html:
             body = ai_html
@@ -311,6 +332,9 @@ class Analyzer:
             body = prose.asset(found[0], g)
         else:
             body = ""
+        if skill_blocks and not ai_html:
+            limit = skills_builtin.CAPTION_ROOM - (prose.visible_len(head) + 2 if head else 0)
+            body = skills_builtin.caption(body.split("\n\n", 1)[0], skill_blocks, limit)
         return head + ("\n\n" if head and body else "") + body
 
     async def _verdict(
@@ -385,6 +409,7 @@ class Analyzer:
         if snaps:
             await progress.step("✍️", "Пишу ответ")
             bullets = "\n".join(f"• {esc(b)}" for b in report.rule_verdict(snaps, g))
-            note = "\n<i>Навыки применяются в ИИ-выводе — подключи ключ ИИ.</i>" if skills else ""
+            custom = [s for s in skills if skills_builtin.get(s.name) is None]
+            note = "\n<i>Твои навыки применяются в ИИ-выводе — подключи ключ ИИ.</i>" if custom else ""
             blocks.append(f"🧭 <b>Коротко</b>\n{bullets}{note}")
         return "\n\n".join(blocks), bool(answered), agents, None
