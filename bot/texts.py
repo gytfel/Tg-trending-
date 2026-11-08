@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from bot.db import Skill, User
 from bot.formatting import esc, esc_attr, plural, progress_bar
-from bot.services import skills_builtin
 from bot.services.quota import QuotaStatus
 from bot.sources.base import CATEGORY_META, Category
 
@@ -56,16 +55,10 @@ def analyze_screen(hours: int, has_fallback: bool) -> str:
 
 
 def skills_screen(skills: list[Skill], limit: int) -> str:
-    builtin = "\n".join(f"{b.icon} <b>{esc(b.key)}</b> — {esc(b.about)}" for b in skills_builtin.ALL)
     text = (
         "🧠 <b>Навыки</b>\n\n"
-        "Навык подстраивает ответ под задачу. Зови по имени в вопросе: "
-        "<i>«разбери BTC навык перегрев»</i> или <i>#перегрев</i>.\n\n"
-        "<b>Встроенные</b> — бот считает сам, работают и без ключа ИИ:\n"
-        f"{builtin}\n"
-        "<i>Для «риска» можно указать цифры: «BTC навык риск депозит 2000 риск 2% стоп 5%».</i>\n\n"
-        "<b>Свои</b> — твои правила или шаблон ответа для ИИ (нужен ключ ИИ). "
-        "Свой навык с именем встроенного заменит его инструкцию для ИИ."
+        "Сохрани свои правила или шаблон один раз — и зови по имени в вопросе.\n"
+        "<i>Например: «разбери BTC, навык тейки»</i>"
     )
     if skills:
         text += f"\n\nТвои навыки: {len(skills)} из {limit}"

@@ -818,12 +818,12 @@ async def test_builtin_skill_by_hashtag(env):
     assert "🌡 <b>Перегрев · BTC</b>" in session.last().text
 
 
-async def test_skills_screen_lists_builtin(env):
+async def test_skills_screen_is_short(env):
     session, feed, _ = env
     await feed(cb("nav:skills"))
     text = session.last().text
-    for name in ("новости", "перегрев", "риск", "арбитраж", "коротко", "скам-чек"):
-        assert f"<b>{name}</b>" in text
+    assert "Сохрани свои правила или шаблон один раз" in text
+    assert "Встроенные" not in text  # список встроенных навыков на экране не показываем
 
 
 async def test_builtin_skill_without_coin_is_about_market(card_env):
