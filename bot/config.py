@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     timezone: str = "UTC"  # время на карточках, например Europe/Kyiv
     stream_answers: bool = True  # «печатать» ответ плавно, как ИИ-чаты
     stream_interval: float = 0.7  # секунд между кусками текста
+    stream_drafts: bool = True  # в личке — черновик Telegram (sendMessageDraft): плавная анимация
+    draft_interval: float = 0.25  # секунд между обновлениями черновика
 
     # Хранилище
     database_path: str = "data/bot.sqlite3"

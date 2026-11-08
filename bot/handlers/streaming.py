@@ -26,18 +26,24 @@ MIN_LEN = 120  # короткий ответ печатать незачем
 Edit = Callable[[str, InlineKeyboardMarkup | None], Awaitable[object]]
 
 
-def frames(full_html: str, group: bool = False) -> list[str]:
-    """Промежуточные кадры печати (без финального): всё более длинные начала текста с курсором."""
+def frames(full_html: str, group: bool = False, steps: int | None = None, cursor: str = CURSOR) -> list[str]:
+    """Промежуточные кадры печати (без финального): всё более длинные начала текста."""
     total = visible_len(full_html)
     if total < MIN_LEN:
         return []
-    steps = 3 if group else max(3, min(8, total // 90 + 2))
+    if steps is None:
+        steps = 3 if group else max(3, min(8, total // 90 + 2))
     out: list[str] = []
     for k in range(1, steps):
         part = html_prefix(full_html, total * k // steps)
-        if part and (not out or part != out[-1].removesuffix(CURSOR)):
-            out.append(part + CURSOR)
+        if part and (not out or part != out[-1].removesuffix(cursor)):
+            out.append(part + cursor)
     return out
+
+
+def draft_frames(full_html: str) -> list[str]:
+    """Кадры для черновика Telegram: мелкими шагами — клиент сам плавно анимирует переходы."""
+    return frames(full_html, steps=max(6, min(24, visible_len(full_html) // 35)), cursor="")
 
 
 async def play(

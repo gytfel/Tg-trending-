@@ -11,6 +11,7 @@ from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.base import BaseSession
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import (
     AnswerCallbackQuery,
     DeleteMessage,
@@ -18,6 +19,7 @@ from aiogram.methods import (
     EditMessageText,
     GetMe,
     SendMessage,
+    SendMessageDraft,
     SendPhoto,
 )
 from aiogram.types import CallbackQuery, Chat, Message, MessageEntity, Update, User
@@ -26,6 +28,7 @@ from bot.ai import AIHub
 from bot.app import build_dispatcher
 from bot.config import Settings
 from bot.db import Database
+from bot.handlers import draft as tg_draft
 from bot.services import Services
 from bot.services.analyzer import Analyzer
 from bot.services.llm import LLM
@@ -45,9 +48,12 @@ class FakeSession(BaseSession):
     def __init__(self) -> None:
         super().__init__()
         self.requests: list = []
+        self.drafts_supported = True  # False — как сервер Telegram без sendMessageDraft
 
     async def make_request(self, bot, method, timeout=None):
         self.requests.append(method)
+        if isinstance(method, SendMessageDraft) and not self.drafts_supported:
+            raise TelegramBadRequest(method, "Bad Request: method not found")
         if isinstance(method, (SendMessage, EditMessageText)):
             chat_id = method.chat_id or UID
             return Message(
@@ -92,6 +98,9 @@ class FakeSession(BaseSession):
 
     def last(self):
         return [r for r in self.requests if isinstance(r, (SendMessage, EditMessageText))][-1]
+
+    def drafts(self) -> list[SendMessageDraft]:
+        return [r for r in self.requests if isinstance(r, SendMessageDraft)]
 
     def buttons(self, req=None) -> list[str]:
         req = req or self.last()
@@ -196,6 +205,8 @@ def dispatcher():
 
 async def make_env(registry, dispatcher, hub=None, **overrides):
     overrides.setdefault("stream_answers", False)  # печать проверяем отдельными тестами
+    overrides.setdefault("stream_drafts", False)  # правками — как в группах; черновики — своими тестами
+    tg_draft.reset_support()
     settings = Settings(bot_token="1:TEST", bot_name="Trending", database_path=":memory:", daily_limit=4, **overrides)
     db = Database(":memory:")
     await db.connect()
@@ -663,5 +674,116 @@ async def test_ai_answer_streams_into_text_report(registry, dispatcher):
         typed = [e for e in edits if e.text.endswith("▍")]
         assert len(typed) >= 3 and all("✱ <b>Bitcoin</b>" in e.text for e in typed)  # отчёт сверху, вывод дописывается
         assert "🤖 <b>Вывод</b>\nBTC держится" in edits[-1].text and edits[-1].reply_markup is not None
+    finally:
+        await svc.db.close()
+
+
+# --- нативная «печать» черновиком Telegram (sendMessageDraft), как у ИИ-ботов -----------------------
+
+
+async def draft_env(registry, dispatcher, **overrides):
+    overrides.setdefault("report_style", "card")
+    return await make_env(
+        registry,
+        dispatcher,
+        stream_answers=True,
+        stream_interval=0.01,
+        stream_drafts=True,
+        draft_interval=0.01,
+        **overrides,
+    )
+
+
+def assert_growing(texts: list[str]) -> None:
+    lengths = [len(t) for t in texts]
+    assert lengths == sorted(lengths) and len(set(lengths)) == len(lengths)  # текст только прибавляется
+
+
+async def test_draft_thinking_then_card_text_typed_in_draft(registry, dispatcher):
+    session, feed, svc = await draft_env(registry, dispatcher)
+    try:
+        await feed(msg("разбери BTC"))
+        drafts = session.drafts()
+        assert drafts[0].text.startswith("✱ <b>Думаю") and drafts[0].chat_id == UID
+        assert len({d.draft_id for d in drafts}) == 1  # один id — Telegram анимирует переходы
+        # «Думаю…» — в черновике, отдельного сообщения нет
+        assert not any(t.startswith("✱ <b>Думаю") for t in session.texts())
+        typed = [d.text for d in drafts if not d.text.startswith("✱ <b>Думаю")]
+        assert len(typed) >= 5
+        assert_growing(typed)
+        photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+        assert photo.caption is None and photo.reply_markup is None  # картинка сразу, текст — под ней
+        final = session.last()
+        assert isinstance(final, SendMessage) and "<b>Bitcoin $100" in final.text
+        assert final.text.startswith(typed[-1].rstrip()[:50])
+        assert "📋 Подробно" in session.buttons(final) and "🔔 Следить за BTC" in session.buttons(final)
+        assert session.requests.index(photo) < session.requests.index(final)
+        await feed(cb("rp:details", message_id=max(svc.reports)[1]))  # кнопки работают и под текстом
+        assert "✱ <b>Bitcoin</b> · BTC · #1" in session.last().text
+    finally:
+        await svc.db.close()
+
+
+async def test_draft_text_report(registry, dispatcher):
+    session, feed, svc = await draft_env(registry, dispatcher, report_style="text")
+    try:
+        await feed(msg("разбери BTC"))
+        typed = [d.text for d in session.drafts() if not d.text.startswith("✱ <b>Думаю")]
+        assert len(typed) >= 5 and all(t.startswith("✱ <b>Bitcoin</b>") for t in typed)
+        assert_growing(typed)
+        assert not any(isinstance(r, EditMessageText) for r in session.requests)  # никаких рывков правками
+        final = session.last()
+        assert isinstance(final, SendMessage) and "✱ <b>Bitcoin</b>" in final.text
+        assert "🔔 Следить за BTC" in session.buttons(final)
+    finally:
+        await svc.db.close()
+
+
+async def test_ai_answer_streams_via_draft(registry, dispatcher):
+    hub = StreamingHub()
+    session, feed, svc = await draft_env(registry, dispatcher, hub=hub)
+    try:
+        await feed(msg("разбери BTC"))
+        assert hub.streamed > 10
+        typed = [d.text for d in session.drafts() if not d.text.startswith("✱ <b>Думаю")]
+        assert len(typed) >= 3 and typed[0].startswith("BTC")  # текст идёт прямо из модели
+        assert_growing(typed)
+        assert not any(t.endswith("▍") for t in typed)  # черновик анимирует сам — без курсора
+        photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+        assert photo.caption is None
+        final = session.last()
+        assert final.text.startswith("BTC держится у <b>$100K</b>")
+        assert "📋 Подробно" in session.buttons(final)
+        assert not any(isinstance(r, (EditMessageCaption, EditMessageText)) for r in session.requests)
+    finally:
+        await svc.db.close()
+
+
+async def test_drafts_unsupported_fall_back_to_edits(registry, dispatcher):
+    session, feed, svc = await draft_env(registry, dispatcher)
+    session.drafts_supported = False
+    try:
+        await feed(msg("разбери BTC"))
+        assert len(session.drafts()) == 1  # одна попытка — дальше бот помнит, что нельзя
+        assert not tg_draft.drafts_available()
+        thinking = [r for r in session.requests if isinstance(r, SendMessage)][0]
+        assert thinking.text.startswith("✱ <b>Думаю")  # «Думаю…» обычным сообщением
+        photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+        edits = [r for r in session.requests if isinstance(r, EditMessageCaption)]
+        assert photo.caption.endswith("▍") and edits and edits[-1].reply_markup is not None
+        before = len(session.requests)
+        await feed(msg("разбери BTC"))
+        assert len(session.drafts()) == 1 and len(session.requests) > before  # второй раз даже не пробует
+    finally:
+        await svc.db.close()
+
+
+async def test_no_drafts_in_groups(registry, dispatcher):
+    session, feed, svc = await draft_env(registry, dispatcher)
+    try:
+        await feed(msg("@trending_test_bot BTC", GROUP))
+        assert session.drafts() == []  # черновики — только в личке
+        photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+        assert photo.chat_id == GROUP.id and photo.reply_parameters is not None
     finally:
         await svc.db.close()

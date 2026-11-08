@@ -1,10 +1,12 @@
 """Ответ ИИ прямо по мере генерации — как в ИИ-чатах.
 
-Как только модель начинает писать, «Думаю…» уступает место ответу: в режиме
-карточки приходит картинка, а подпись под ней дописывается кусками; в
-текстовом режиме текст пишется в том же сообщении. Правки — не чаще раза в
-`interval` секунд (лимиты Telegram), на конце курсор ▍. Финальная правка —
-полный ответ с кнопками.
+В личке ответ растёт в черновике Telegram (sendMessageDraft) — клиент плавно
+анимирует каждое обновление, как у ИИ-ботов. В режиме карточки сначала
+приходит картинка, а текст пишется под ней. В конце бот отправляет обычное
+сообщение с кнопками, черновик исчезает.
+
+Без черновиков (группы, старый сервер) — правки сообщения не чаще раза в
+`interval` секунд, курсор ▍ на конце, финальная правка — с кнопками.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, Message
 
 from bot.formatting import html_prefix, split_message
+from bot.handlers.draft import Draft, DraftUnavailable
 from bot.handlers.streaming import CURSOR
 from bot.render import Brand, Card, render
 from bot.services.prose import CAPTION_LIMIT, visible_len
@@ -42,8 +45,11 @@ class LiveAnswer:
         reply: bool = False,
         interval: float = 0.8,
         clock: Callable[[], float] = time.monotonic,
+        draft: Draft | None = None,
     ) -> None:
         self.chat = chat
+        self.draft = draft
+        self.draft_card = False  # в режиме черновика: картинка уже отправлена отдельно
         self.thinking = thinking
         self.card_style = card_style
         self.brand = brand
@@ -68,6 +74,16 @@ class LiveAnswer:
         self.started = True
         self.caption_head, self.text_prefix = caption_head, text_prefix
         await self.thinking.close()
+        if self.draft is not None:
+            self.mode = "draft"
+            if self.card_style and card is not None:
+                try:
+                    png = await asyncio.to_thread(render, card, await self.brand())
+                    await self.chat.answer_photo(BufferedInputFile(png, filename="trending.png"))
+                    self.draft_card = True
+                except Exception:  # noqa: BLE001 — без картинки просто пишем текст
+                    log.exception("live card failed")
+            return
         if self.card_style and card is not None:
             try:
                 png = await asyncio.to_thread(render, card, await self.brand())
@@ -87,6 +103,9 @@ class LiveAnswer:
     # -- текст по мере генерации ---------------------------------------------------------------
 
     def compose(self, body_html: str) -> str:
+        if self.mode == "draft":  # черновик анимирует сам — без курсора
+            full = (self.caption_head if self.draft_card else self.text_prefix) + body_html
+            return html_prefix(full, TEXT_SHOW) if visible_len(full) > TEXT_SHOW else full
         if self.mode == "caption":
             full, limit = self.caption_head + body_html, CAPTION_SHOW
         else:
@@ -103,30 +122,33 @@ class LiveAnswer:
         await self._flush()
 
     async def _flush(self) -> None:
-        if self._pending is None or self.message is None:
+        if self._pending is None or (self.message is None and self.mode != "draft"):
             return
         async with self._lock:
             text = self.compose(self._pending)
             if text == self._shown:
                 return
             try:
-                if self.mode == "caption":
+                if self.mode == "draft":
+                    await self.draft.show(text)
+                elif self.mode == "caption":
                     await self.message.edit_caption(caption=text)
                 else:
                     await self.message.edit_text(text)
                 self._shown = text
             except TelegramRetryAfter as e:
                 self._cooldown = self.clock() + e.retry_after
-            except TelegramBadRequest as e:
-                log.debug("live edit failed: %s", e)
+            except (TelegramBadRequest, DraftUnavailable) as e:
+                log.debug("live edit failed: %r", e)
             self._last = self.clock()
 
     # -- финал ------------------------------------------------------------------------------------
 
     async def finish(self, caption: str, text: str, kb: InlineKeyboardMarkup | None) -> Message:
         """Полный ответ с кнопками. caption — подпись под карточкой, text — текстовый ответ."""
-        assert self.message is not None
         async with self._lock:
+            if self.mode == "draft":  # обычное сообщение — черновик исчезнет сам
+                return await self._send_parts(caption if self.draft_card else text, kb)
             if self.mode == "caption":
                 return await self._finish_caption(caption, kb)
             return await self._finish_text(text, kb)

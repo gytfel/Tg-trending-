@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardMarkup, Message
@@ -23,6 +23,7 @@ from bot.callbacks import Ask, Nav, ReportCb
 from bot.formatting import esc, split_message
 from bot.handlers import streaming
 from bot.handlers.common import safe_edit, show
+from bot.handlers.draft import Draft, DraftUnavailable, drafts_available
 from bot.handlers.live import LiveAnswer
 from bot.handlers.thinking import ThinkingMessage
 from bot.query_parser import parse_query
@@ -172,8 +173,14 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
     try:
         # «✱ Думаю…» — живое сообщение с ходом обработки; потом оно превратится в отчёт
         in_group = chat_msg.chat.type != ChatType.PRIVATE
+        draft = None
+        if not in_group and svc.settings.stream_answers and svc.settings.stream_drafts and drafts_available():
+            # в личке — черновик Telegram: клиент плавно анимирует каждое обновление, как в ИИ-чатах
+            draft = Draft(chat_msg.bot, chat_msg.chat.id)
         # в группах у Telegram лимит ~20 сообщений в минуту — обновляем «Думаю…» реже
-        thinking = await ThinkingMessage.start(chat_msg, reply=reply, interval=3.0 if in_group else 1.5)
+        interval = 1.0 if draft else (3.0 if in_group else 1.5)
+        thinking = await ThinkingMessage.start(chat_msg, reply=reply, interval=interval, draft=draft)
+        draft = thinking.draft  # None, если сервер черновик не принял — тогда правками
         live = None
         if svc.llm.enabled and svc.settings.stream_answers:
             # ответ ИИ пойдёт в чат прямо по мере генерации
@@ -183,7 +190,14 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
                 card_style=svc.settings.report_style.strip().lower() == "card",
                 brand=lambda: _brand(chat_msg, svc),
                 reply=reply,
-                interval=max(svc.settings.stream_interval, 2.5) if in_group else svc.settings.stream_interval,
+                interval=(
+                    svc.settings.draft_interval
+                    if draft
+                    else max(svc.settings.stream_interval, 2.5)
+                    if in_group
+                    else svc.settings.stream_interval
+                ),
+                draft=draft,
             )
         try:
             async with ChatActionSender.typing(bot=chat_msg.bot, chat_id=chat_msg.chat.id):
@@ -192,8 +206,8 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
             await thinking.close()
     except Exception:  # noqa: BLE001
         log.exception("analysis failed for %r", text)
-        if thinking is not None and thinking.message is not None:
-            await safe_edit(thinking.message, texts.ERROR, keyboards.back())
+        if thinking is not None:
+            await _say(chat_msg, thinking.message, texts.ERROR, keyboards.back())
         return
     finally:
         svc.busy.discard(user_id)
@@ -204,7 +218,7 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
             msg = texts.NOT_FOUND
         else:
             msg = texts.not_listed(", ".join(v for _, v in parsed.targets))
-        await safe_edit(progress, msg, keyboards.back())
+        await _say(chat_msg, progress, msg, keyboards.back())
         return
 
     await svc.quota.spend(user_id)
@@ -218,12 +232,14 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
         stream=svc.settings.stream_answers and svc.settings.stream_interval > 0,
         interval=max(svc.settings.stream_interval, 1.2) if group else svc.settings.stream_interval,
         group=group,
+        draft=draft if drafts_available() else None,
+        draft_interval=svc.settings.draft_interval,
     )
     async with ChatActionSender.typing(bot=chat_msg.bot, chat_id=chat_msg.chat.id):  # «печатает…» до конца
         sent = None
         if live is not None and live.started:
             # ответ ИИ уже идёт в чат — дописываем целиком и вешаем кнопки
-            details = live.mode == "caption"
+            details = live.mode == "caption" or live.draft_card
             sent = await live.finish(result.caption, result.text, keyboards.report(watch_symbol, details=details))
         elif svc.settings.report_style.strip().lower() == "card" and result.card is not None:
             kb = keyboards.report(watch_symbol, details=True)
@@ -240,9 +256,40 @@ class Pace:
     stream: bool = False
     interval: float = 0.7
     group: bool = False
+    draft: Draft | None = None  # в личке — печать черновиком Telegram (анимируется клиентом)
+    draft_interval: float = 0.25
 
 
 NO_STREAM = Pace()
+
+
+async def _say(chat_msg: Message, progress: Message | None, text: str, kb: InlineKeyboardMarkup | None) -> Message:
+    """Короткий ответ вместо «Думаю…»; если «Думаю…» было черновиком — новым сообщением."""
+    if progress is not None:
+        return await safe_edit(progress, text, kb)
+    return await chat_msg.answer(text, reply_markup=kb)
+
+
+async def _type_draft(draft: Draft, text: str, interval: float) -> None:
+    """Плавно «пишет» текст в черновике; финальное сообщение отправляет вызывающий."""
+    for frame in streaming.draft_frames(text):
+        try:
+            await draft.show(frame)
+        except TelegramRetryAfter as e:
+            log.debug("черновик: flood control, %s с", e.retry_after)
+            await asyncio.sleep(min(e.retry_after, 3))
+            return
+        except DraftUnavailable:
+            return
+        await asyncio.sleep(interval)
+
+
+async def _send_parts(chat_msg: Message, text: str, kb: InlineKeyboardMarkup | None) -> Message:
+    parts = split_message(text) or [""]
+    sent = chat_msg
+    for i, part in enumerate(parts):
+        sent = await _send(chat_msg, part, kb if i == len(parts) - 1 else None, edit=False)
+    return sent
 
 
 async def _stream_edit(msg: Message, text: str, kb: InlineKeyboardMarkup | None, pace: Pace) -> Message:
@@ -264,10 +311,19 @@ async def _stream_edit(msg: Message, text: str, kb: InlineKeyboardMarkup | None,
 
 
 async def _send_text(
-    chat_msg: Message, progress: Message, text: str, kb: InlineKeyboardMarkup, pace: Pace = NO_STREAM
+    chat_msg: Message, progress: Message | None, text: str, kb: InlineKeyboardMarkup, pace: Pace = NO_STREAM
 ) -> Message:
     """Текстовый ответ: печатается вместо «Думаю…»; длинный — частями, кнопки на последней."""
     parts = split_message(text)
+    if progress is None or (pace.stream and pace.draft is not None):
+        # черновик: текст плавно пишется в «пузыре», потом приходит обычное сообщение с кнопками
+        if pace.stream and pace.draft is not None and parts:
+            await _type_draft(pace.draft, parts[0], pace.draft_interval)
+        sent = await _send_parts(chat_msg, text, kb)
+        if progress is not None:
+            with contextlib.suppress(TelegramBadRequest):
+                await progress.delete()
+        return sent
     if len(parts) == 1:
         return await _stream_edit(progress, text, kb, pace)
     sent = progress
@@ -279,7 +335,7 @@ async def _send_text(
 
 async def _send_card(
     chat_msg: Message,
-    progress: Message,
+    progress: Message | None,
     result,
     kb: InlineKeyboardMarkup,
     svc: Services,
@@ -288,6 +344,8 @@ async def _send_card(
 ) -> Message | None:
     """Картинка с цифрами + живой текст подписью, который «печатается». None — картинка не получилась."""
     caption = result.caption
+    if pace.stream and pace.draft is not None:
+        return await _send_card_draft(chat_msg, progress, result, kb, svc, pace)
     fits = bool(caption) and visible_len(caption) <= CAPTION_LIMIT
     fr = streaming.frames(caption, pace.group) if pace.stream and fits else []
     try:
@@ -301,10 +359,9 @@ async def _send_card(
     except Exception:  # noqa: BLE001 — картинка не должна ломать ответ
         log.exception("card report failed, falling back to text")
         return None
-    try:
-        await progress.delete()  # «Думаю…» больше не нужно — ответ пришёл картинкой
-    except TelegramBadRequest:
-        pass
+    if progress is not None:
+        with contextlib.suppress(TelegramBadRequest):
+            await progress.delete()  # «Думаю…» больше не нужно — ответ пришёл картинкой
     if not fits:  # длинный текст — отдельным сообщением под картинкой
         first = await chat_msg.answer("✍️")
         return await _stream_edit(first, caption or result.text, kb, pace)
@@ -320,6 +377,24 @@ async def _send_card(
             with contextlib.suppress(TelegramBadRequest):
                 await sent.edit_caption(caption=caption, reply_markup=kb)
     return sent
+
+
+async def _send_card_draft(
+    chat_msg: Message, progress: Message | None, result, kb: InlineKeyboardMarkup, svc: Services, pace: Pace
+) -> Message | None:
+    """Личка с черновиками: картинка сразу, текст под ней плавно пишется черновиком и приходит с кнопками."""
+    try:
+        png = await asyncio.to_thread(render, result.card, await _brand(chat_msg, svc))
+        await chat_msg.answer_photo(BufferedInputFile(png, filename="trending.png"))
+    except Exception:  # noqa: BLE001 — картинка не должна ломать ответ
+        log.exception("card report failed, falling back to text")
+        return None
+    if progress is not None:
+        with contextlib.suppress(TelegramBadRequest):
+            await progress.delete()
+    text = result.caption or result.text
+    await _type_draft(pace.draft, split_message(text)[0] if text else "", pace.draft_interval)
+    return await _send_parts(chat_msg, text, kb)
 
 
 async def _brand(chat_msg: Message, svc: Services) -> Brand:

@@ -1,9 +1,10 @@
-"""«✱ Думаю…» — живое сообщение с ходом обработки запроса.
+"""«✱ Думаю…» — пока бот работает над запросом.
 
-Как у ИИ-чатов: «Думаю…» с бегущими точками и таймер «⏱ 8 с». Шаги работы
-(Progress) по-прежнему записываются, но в чате не показываются. Правки сообщения прореживаются (не чаще раза в
-секунду), чтобы не упираться в лимиты Telegram. Когда разбор готов,
-сообщение заменяется отчётом.
+Как у ИИ-чатов: «Думаю…» с бегущими точками и таймер «⏱ 8 с». В личке это
+черновик Telegram (sendMessageDraft): обновления анимируются, а ответ потом
+плавно «прорастает» из того же черновика. В группах — обычное сообщение,
+правки которого прореживаются из-за лимитов. Шаги работы (Progress)
+записываются, но в чате не показываются.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from collections.abc import Callable
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.types import Message
 
+from bot.handlers.draft import Draft, DraftUnavailable
 from bot.services.progress import Progress
 
 log = logging.getLogger(__name__)
@@ -30,9 +32,11 @@ class ThinkingMessage(Progress):
         interval: float = 1.5,
         min_gap: float = 1.0,
         clock: Callable[[], float] = time.monotonic,
+        draft: Draft | None = None,
     ) -> None:
         super().__init__()
         self.message = message
+        self.draft = draft
         self.interval = interval
         self.min_gap = min_gap
         self.clock = clock
@@ -46,11 +50,20 @@ class ThinkingMessage(Progress):
         self._ticker: asyncio.Task | None = None
 
     @classmethod
-    async def start(cls, chat: Message, *, reply: bool = False, **kwargs) -> ThinkingMessage:
-        """reply=True — ответом на сообщение пользователя (в группах)."""
+    async def start(
+        cls, chat: Message, *, reply: bool = False, draft: Draft | None = None, **kwargs
+    ) -> ThinkingMessage:
+        """reply=True — ответом на сообщение пользователя (в группах); draft — черновиком (в личке)."""
         self = cls(**kwargs)
         text = self.render()
-        self.message = await (chat.reply(text) if reply else chat.answer(text))
+        if draft is not None:
+            try:
+                await draft.show(text)
+                self.draft = draft
+            except (DraftUnavailable, TelegramRetryAfter):
+                self.draft = None
+        if self.draft is None:
+            self.message = await (chat.reply(text) if reply else chat.answer(text))
         self._last_text, self._last_edit = text, self.clock()
         self._ticker = asyncio.create_task(self._tick())
         return self
@@ -69,7 +82,7 @@ class ThinkingMessage(Progress):
         await self._flush()
 
     async def _flush(self, force: bool = False) -> None:
-        if self._closed or self.message is None:
+        if self._closed or (self.message is None and self.draft is None):
             return
         async with self._lock:
             if self._closed:
@@ -81,7 +94,12 @@ class ThinkingMessage(Progress):
             if text == self._last_text:
                 return
             try:
-                await self.message.edit_text(text)
+                if self.draft is not None:
+                    await self.draft.show(text)
+                else:
+                    await self.message.edit_text(text)
+            except DraftUnavailable:
+                return
             except TelegramRetryAfter as e:
                 self._cooldown_until = now + e.retry_after
                 log.debug("thinking: flood control, пауза %s с", e.retry_after)
