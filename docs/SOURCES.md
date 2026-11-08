@@ -2,7 +2,7 @@
 
 > Файл сгенерирован командой `python -m bot.sources.probe --catalog docs/SOURCES.md`.
 
-Всего: **233** · ✅ подключено без ключа: **137** · 🔑 подключено, нужен ключ: **12** · 🛠 в планах: **84**
+Всего: **233** · ✅ подключено без ключа: **136** · 🔑 подключено, нужен ключ: **13** · 🛠 в планах: **84**
 
 
 ## 📊 Агрегаторы (26)
@@ -220,39 +220,39 @@
 
 | id | Источник | Статус | Запросы | Примечание |
 |---|---|---|---|---|
-| `ambcrypto` | [AMBCrypto](https://ambcrypto.com) | ✅ | любой |  |
-| `beincrypto` | [BeInCrypto](https://beincrypto.com) | ✅ | любой |  |
-| `bitcoincom` | [Bitcoin.com News](https://news.bitcoin.com) | ✅ | любой |  |
-| `bitcoinist` | [Bitcoinist](https://bitcoinist.com) | ✅ | любой |  |
-| `bitcoinmagazine` | [Bitcoin Magazine](https://bitcoinmagazine.com) | ✅ | любой |  |
-| `bitsmedia` | [Bits.media (RU)](https://bits.media) | ✅ | любой |  |
-| `blockworks` | [Blockworks](https://blockworks.co) | ✅ | любой |  |
-| `coindesk` | [CoinDesk](https://www.coindesk.com) | ✅ | любой |  |
-| `coingape` | [CoinGape](https://coingape.com) | ✅ | любой |  |
-| `coinjournal` | [CoinJournal](https://coinjournal.net) | ✅ | любой |  |
-| `coinpedia` | [Coinpedia](https://coinpedia.org) | ✅ | любой |  |
-| `cointelegraph` | [Cointelegraph](https://cointelegraph.com) | ✅ | любой |  |
-| `cryptobriefing` | [Crypto Briefing](https://cryptobriefing.com) | ✅ | любой |  |
-| `cryptocompare_news` | [CryptoCompare News](https://www.cryptocompare.com/news/) | ✅ | любой |  |
-| `cryptodaily` | [Crypto Daily](https://cryptodaily.co.uk) | ✅ | любой |  |
-| `cryptonews` | [Cryptonews](https://cryptonews.com) | ✅ | любой |  |
-| `cryptonewsnet` | [crypto.news](https://crypto.news) | ✅ | любой |  |
-| `cryptopotato` | [CryptoPotato](https://cryptopotato.com) | ✅ | любой |  |
-| `cryptoslate` | [CryptoSlate](https://cryptoslate.com) | ✅ | любой |  |
-| `dailyhodl` | [The Daily Hodl](https://dailyhodl.com) | ✅ | любой |  |
-| `decrypt` | [Decrypt](https://decrypt.co) | ✅ | любой |  |
-| `finbold` | [Finbold](https://finbold.com) | ✅ | любой |  |
-| `forklog` | [ForkLog (RU)](https://forklog.com) | ✅ | любой |  |
+| `ambcrypto` | [AMBCrypto](https://ambcrypto.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `beincrypto` | [BeInCrypto](https://beincrypto.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `bitcoincom` | [Bitcoin.com News](https://news.bitcoin.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `bitcoinist` | [Bitcoinist](https://bitcoinist.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `bitcoinmagazine` | [Bitcoin Magazine](https://bitcoinmagazine.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `bitsmedia` | [Bits.media (RU)](https://bits.media) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `blockworks` | [Blockworks](https://blockworks.co) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `coindesk` | [CoinDesk](https://www.coindesk.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `coingape` | [CoinGape](https://coingape.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `coinjournal` | [CoinJournal](https://coinjournal.net) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `coinpedia` | [Coinpedia](https://coinpedia.org) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `cointelegraph` | [Cointelegraph](https://cointelegraph.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `cryptobriefing` | [Crypto Briefing](https://cryptobriefing.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `cryptodaily` | [Crypto Daily](https://cryptodaily.co.uk) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `cryptonews` | [Cryptonews](https://cryptonews.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `cryptonewsnet` | [crypto.news](https://crypto.news) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `cryptopotato` | [CryptoPotato](https://cryptopotato.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `cryptoslate` | [CryptoSlate](https://cryptoslate.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `dailyhodl` | [The Daily Hodl](https://dailyhodl.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `decrypt` | [Decrypt](https://decrypt.co) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `finbold` | [Finbold](https://finbold.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `forklog` | [ForkLog (RU)](https://forklog.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
 | `google_news` | [Google News (EN)](https://news.google.com) | ✅ | любой |  |
 | `google_news_ru` | [Google Новости (RU)](https://news.google.com/?hl=ru) | ✅ | любой |  |
-| `incrypted` | [Incrypted (RU)](https://incrypted.com) | ✅ | любой |  |
-| `newsbtc` | [NewsBTC](https://www.newsbtc.com) | ✅ | любой |  |
-| `theblock` | [The Block](https://www.theblock.co) | ✅ | любой |  |
-| `thecryptobasic` | [The Crypto Basic](https://thecryptobasic.com) | ✅ | любой |  |
-| `thedefiant` | [The Defiant](https://thedefiant.io) | ✅ | любой |  |
-| `utoday` | [U.Today](https://u.today) | ✅ | любой |  |
-| `watcherguru` | [Watcher.Guru](https://watcher.guru) | ✅ | любой |  |
-| `zycrypto` | [ZyCrypto](https://zycrypto.com) | ✅ | любой |  |
+| `incrypted` | [Incrypted (RU)](https://incrypted.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `newsbtc` | [NewsBTC](https://www.newsbtc.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `theblock` | [The Block](https://www.theblock.co) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `thecryptobasic` | [The Crypto Basic](https://thecryptobasic.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `thedefiant` | [The Defiant](https://thedefiant.io) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `utoday` | [U.Today](https://u.today) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `watcherguru` | [Watcher.Guru](https://watcher.guru) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `zycrypto` | [ZyCrypto](https://zycrypto.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `cryptocompare_news` | [CryptoCompare News](https://www.cryptocompare.com/news/) | 🔑 `CRYPTOCOMPARE_API_KEY` | любой | бесплатный ключ: developers.coindesk.com |
 | `cryptopanic` | [CryptoPanic](https://cryptopanic.com) | 🔑 `CRYPTOPANIC_API_KEY` | любой |  |
 | `newsapi` | [NewsAPI](https://newsapi.org) | 🔑 `NEWSAPI_KEY` | любой |  |
 | `binance_announcements` | [Binance Announcements](https://www.binance.com/en/support/announcement) | 🛠 в планах | — | листинги/делистинги |

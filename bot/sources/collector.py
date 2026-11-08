@@ -10,6 +10,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+import aiohttp
+
 from bot.sources.base import (
     Asset,
     Category,
@@ -238,6 +240,12 @@ async def _run_one(src: DataSource, http: Http, asset: Asset | None, timeout: fl
     except (KeyError, IndexError, TypeError, ValueError) as e:
         log.debug("source %s: bad payload: %r", src.id, e)
         return src, None, f"формат: {type(e).__name__}"
+    except aiohttp.ClientResponseError as e:  # ответ пришёл, но его не разобрать
+        log.debug("source %s: bad response: %r", src.id, e)
+        return src, None, f"битый ответ {e.status}"
+    except aiohttp.ClientConnectionError as e:
+        log.debug("source %s: connection failed: %r", src.id, e)
+        return src, None, "нет соединения"
     except Exception as e:  # noqa: BLE001 — источник не должен ронять разбор
         log.debug("source %s failed: %r", src.id, e)
         return src, None, type(e).__name__

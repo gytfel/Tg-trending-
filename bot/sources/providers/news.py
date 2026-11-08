@@ -11,9 +11,10 @@ import re
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlsplit
 
 from bot.sources.base import Asset, Category, Ctx, NewsItem, NoData, Scope
+from bot.sources.http import HttpError
 from bot.sources.registry import planned, source
 
 ATOM = "{http://www.w3.org/2005/Atom}"
@@ -121,11 +122,40 @@ FEEDS: list[tuple[str, str, str, str]] = [
 ]
 
 
+# RSS просим как RSS: часть сайтов отвечает 403 на «Accept: application/json»
+FEED_HEADERS = {"Accept": "application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5"}
+# сайт закрыт для ботов (Cloudflare и т. п.) или временно недоступен
+BLOCKED = {401, 403, 429, 503}
+_PUBLISHER = re.compile(r"\s+[-–—|]\s+[^-–—|]{2,40}$")
+
+
+async def site_news(ctx: Ctx, homepage: str, name: str) -> list[NewsItem]:
+    """Свежие заголовки сайта через Google News (site:…) — если сам сайт не пускает ботов."""
+    host = (urlsplit(homepage).hostname or "").removeprefix("www.")
+    url = f"https://news.google.com/rss/search?q={quote_plus(f'site:{host}')}+when:3d&hl=en-US&gl=US&ceid=US:en"
+    items = parse_feed(await ctx.http.get_text(url, headers=FEED_HEADERS, ttl=900), name)
+    for n in items:  # «Заголовок - Bitcoin Magazine» → «Заголовок»
+        n.title = _PUBLISHER.sub("", n.title)
+    return items
+
+
 def _make_rss_source(sid: str, name: str, url: str, homepage: str) -> None:
-    @source(sid, name, category=Category.NEWS, scope=Scope.ANY, homepage=homepage)
+    @source(
+        sid,
+        name,
+        category=Category.NEWS,
+        scope=Scope.ANY,
+        homepage=homepage,
+        note="закрыт для ботов — заголовки через Google News",
+    )
     async def _rss(ctx: Ctx):
-        text = await ctx.http.get_text(url, ttl=600)
-        return relevant(parse_feed(text, name), ctx.asset)
+        try:
+            items = parse_feed(await ctx.http.get_text(url, headers=FEED_HEADERS, ttl=600), name)
+        except HttpError as e:
+            if e.status not in BLOCKED:
+                raise
+            items = await site_news(ctx, homepage, name)
+        return relevant(items, ctx.asset)
 
 
 for _feed in FEEDS:
@@ -167,12 +197,19 @@ async def google_news_ru(ctx: Ctx):
     category=Category.NEWS,
     scope=Scope.ANY,
     homepage="https://www.cryptocompare.com/news/",
+    key="CRYPTOCOMPARE_API_KEY",  # без ключа API новостей отвечает 401
+    note="бесплатный ключ: developers.coindesk.com",
 )
 async def cryptocompare_news(ctx: Ctx):
     params = {"lang": "EN"}
     if ctx.asset and ctx.asset.symbol:
         params["categories"] = ctx.asset.symbol.upper()
-    d = await ctx.http.get_json("https://min-api.cryptocompare.com/data/v2/news/", params, ttl=600)
+    d = await ctx.http.get_json(
+        "https://min-api.cryptocompare.com/data/v2/news/",
+        params,
+        headers={"authorization": f"Apikey {ctx.key}"},
+        ttl=600,
+    )
     rows = d.get("Data")
     if not isinstance(rows, list):
         raise NoData("нет новостей")

@@ -17,6 +17,7 @@ import aiohttp
 log = logging.getLogger(__name__)
 
 DEFAULT_UA = "Mozilla/5.0 (compatible; TgTrendingBot/0.1; +https://github.com/gytfel/Tg-trending-)"
+MAX_HEADER = 64 * 1024
 
 
 class HttpError(Exception):
@@ -59,6 +60,10 @@ class Http:
                 timeout=aiohttp.ClientTimeout(total=self._timeout),
                 headers={"User-Agent": self._ua, "Accept": "application/json, text/plain, */*"},
                 trust_env=True,  # уважаем HTTP(S)_PROXY из окружения
+                # по умолчанию aiohttp обрывает ответ, если заголовок длиннее 8 КБ (ClientResponseError),
+                # а у части WordPress-сайтов длинные Link/CSP — например, у Coinpedia
+                max_line_size=MAX_HEADER,
+                max_field_size=MAX_HEADER,
             )
         return self._session
 

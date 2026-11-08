@@ -1,7 +1,7 @@
 # Tg-trending — Telegram-бот «ИИ-аналитик» для крипторынка
 
 Бот разбирает монету по тикеру, адресу контракта или вопросу своими словами.
-Он параллельно опрашивает **130+ источников без ключей** (всего в каталоге 226),
+Он параллельно опрашивает **130+ источников без ключей** (всего в каталоге 233),
 собирает отчёт и даёт вывод через Claude. Ещё в боте есть слежки за ценой и
 пользовательские «навыки» — сохранённые правила и шаблоны ответа.
 
@@ -255,7 +255,7 @@ python -m bot.sources.probe BTC --only binance,okx,coingecko -v
 | ⛓ Ончейн | 8 + 1 / 24 | mempool.space, Blockchain.com, Blockchair, Coin Metrics (MVRV, активные адреса), газ ETH, Solana RPC |
 | 🛡 Безопасность | 3 / 9 | GoPlus (EVM и Solana), Honeypot.is, RugCheck |
 | 🌡 Настроения | 1 + 2 / 9 | Fear & Greed; CMC F&G и LunarCrush по ключу |
-| 📰 Новости | 33 + 2 / 40 | 30 RSS-лент (CoinDesk, Cointelegraph, The Block, Decrypt, ForkLog, Incrypted…), Google News EN/RU |
+| 📰 Новости | 32 + 3 / 40 | 30 RSS-лент (CoinDesk, Cointelegraph, The Block, Decrypt, ForkLog, Incrypted…; если сайт закрыт для ботов — его заголовки через Google News), Google News EN/RU; CryptoCompare News по ключу |
 | 💬 Соцсети | 5 / 13 | Reddit, 4chan /biz/, StockTwits, Hacker News, Mastodon |
 | 🌍 Макро | 3 + 1 / 9 | Yahoo Finance (DXY, S&P 500, Nasdaq, золото, VIX, UST 10Y), курсы ЕЦБ и ЦБ РФ; FRED по ключу |
 
