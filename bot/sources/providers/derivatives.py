@@ -415,14 +415,6 @@ async def deribit_options(ctx: Ctx):
 
 
 # --- в каталоге, ещё не подключены ---------------------------------------------
-planned(
-    "coinglass",
-    "CoinGlass",
-    Category.DERIVATIVES,
-    "https://www.coinglass.com",
-    key="COINGLASS_API_KEY",
-    note="ликвидации, агрегированный OI",
-)
 planned("velo", "Velo Data", Category.DERIVATIVES, "https://velo.xyz", key="VELO_API_KEY")
 planned("laevitas", "Laevitas", Category.DERIVATIVES, "https://www.laevitas.ch", key="LAEVITAS_API_KEY", note="опционы")
 planned("gmx", "GMX", Category.DERIVATIVES, "https://gmx.io")

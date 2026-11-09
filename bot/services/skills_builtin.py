@@ -648,6 +648,132 @@ def render_vol(inp: SkillInput) -> str:
     )
 
 
+# --- 💥 ликвидации, 🔓 разлоки, 🐋 киты ------------------------------------------------------------------
+
+
+def _big(v: float | None) -> str:
+    return fmt_big(v) if v else "$0"
+
+
+def _per_coin(inp: SkillInput, icon: str, name: str, key: str, draw: Callable[[Snapshot], str]) -> str:
+    if not inp.snaps:
+        return _need_coin(icon, name, key)
+    return "\n\n".join(draw(s) for s in inp.snaps)
+
+
+def _liquidations(s: Snapshot) -> str:
+    head = _title("💥", "Ликвидации", s)
+    lines = [head]
+    l24, s24 = _num(s.metric("liq_long_24h")), _num(s.metric("liq_short_24h"))
+    if l24 is not None and s24 is not None:
+        total = l24 + s24
+        line = f"За сутки по крупным биржам: лонгов <b>{_big(l24)}</b>, шортов <b>{_big(s24)}</b>"
+        if total:
+            share = max(l24, s24) / total
+            if share >= 0.7:
+                line += f" — выносили {'лонгистов' if l24 > s24 else 'шортистов'} ({share * 100:.0f}%)"
+        lines.append(line + ".")
+        if (avg := _num(s.metric("liq_avg_24h"))) and total:
+            k = total / avg
+            lines.append(
+                f"Это в {k:.1f} раза больше обычного — крупная чистка."
+                if k >= 2
+                else "Обычный объём ликвидаций."
+                if k >= 0.5
+                else "Ликвидаций меньше обычного — рынок спокоен."
+            )
+    ol, os_ = s.metric("okx_liq_long"), s.metric("okx_liq_short")
+    if ol is not None and os_ is not None:
+        lines.append(f"OKX, {esc(ol.note or 'последние')}: лонги {_big(_num(ol))}, шорты {_big(_num(os_))}.")
+    if len(lines) == 1:
+        return head + "\nДанных о ликвидациях нет: фьючерсов на OKX нет, ключ CoinGlass не подключён."
+    longs = (l24 if l24 is not None else _num(ol)) or 0
+    shorts = (s24 if s24 is not None else _num(os_)) or 0
+    if longs + shorts:
+        if longs >= shorts * 2:
+            lines.append(
+                "Итог: вынесли лонги — после такой чистки часто бывает отскок, но если цена продолжит падать, "
+                "ликвидации подтолкнут её дальше."
+            )
+        elif shorts >= longs * 2:
+            lines.append(
+                "Итог: вынесли шорты (шорт-сквиз) — рост на ликвидациях часто выдыхается, когда они кончаются."
+            )
+        else:
+            lines.append("Итог: лонги и шорты выносили поровну — явного перекоса нет.")
+    if l24 is None:
+        lines.append("<i>Полная картина по всем биржам за сутки — с ключом CoinGlass (COINGLASS_API_KEY, платный).</i>")
+    return "\n".join(lines)
+
+
+def render_liquidations(inp: SkillInput) -> str:
+    return _per_coin(inp, "💥", "Ликвидации", "ликвидации", _liquidations)
+
+
+def _unlocks(s: Snapshot) -> str:
+    head = _title("🔓", "Разлоки", s)
+    lines = [head]
+    events = [m for i in (1, 2, 3) if (m := s.metric(f"unlock_{i}")) is not None]
+    for m in events:
+        usd = _num(m)
+        lines.append(f"• {esc(m.note or '')}" + (f" — <b>{_big(usd)}</b>" if usd else ""))
+    if events:
+        lines.insert(1, "Ближайшие разлоки:")
+    market = s.best_market()
+    month = _num(s.metric("unlock_30d_usd"))
+    if month and market and market.market_cap:
+        share = month / market.market_cap * 100
+        word = "сильное давление" if share >= 5 else "заметное давление" if share >= 2 else "давление небольшое"
+        lines.append(f"За 30 дней разблокируют ≈ {_big(month)} — {share:.1f}% капитализации: {word}.")
+    if market and market.market_cap and market.fdv and market.fdv > market.market_cap * 1.2:
+        free = market.market_cap / market.fdv * 100
+        lines.append(
+            f"В обороте {free:.0f}% токенов (капа {_big(market.market_cap)} при FDV {_big(market.fdv)}) — "
+            "остальное ещё будут разлочивать."
+        )
+    if not events:
+        lines.append(
+            "Расписание разлоков — с ключом Tokenomist (TOKENOMIST_API_KEY, платный)."
+            if s.metric("unlock_30d_usd") is None
+            else "Ближайших разлоков нет."
+        )
+    return "\n".join(lines) if len(lines) > 1 else head + "\nДанных о токеномике нет."
+
+
+def render_unlocks(inp: SkillInput) -> str:
+    return _per_coin(inp, "🔓", "Разлоки", "разлоки", _unlocks)
+
+
+def _whales(s: Snapshot) -> str:
+    head = _title("🐋", "Киты", s)
+    count = s.metric("whale_count")
+    if count is None:
+        return (
+            head
+            + "\nКрупные переводы — с ключом Whale Alert (WHALE_ALERT_API_KEY): переводы от $500K за последний час."
+        )
+    to_ex, from_ex = _num(s.metric("whale_to_ex")) or 0, _num(s.metric("whale_from_ex")) or 0
+    lines = [
+        head + " · за час, переводы от $500K",
+        f"На биржи: <b>{_big(to_ex)}</b> (могут продавать) · с бирж: <b>{_big(from_ex)}</b> (выводят в кошельки).",
+    ]
+    if (mint := _num(s.metric("whale_mint"))) is not None and mint:
+        lines.append(f"{'Выпуск' if mint > 0 else 'Сжигание'} монет: {_big(abs(mint))}.")
+    if count.note:
+        lines.append("Крупнейшие:\n" + "\n".join(f"• {esc(x)}" for x in count.note.split(" | ")))
+    if to_ex >= from_ex * 2 and to_ex:
+        lines.append("Итог: на биржи заносят заметно больше — возможна продажа, осторожно с покупками.")
+    elif from_ex >= to_ex * 2 and from_ex:
+        lines.append("Итог: с бирж выводят заметно больше — киты скорее копят.")
+    else:
+        lines.append("Итог: явного перекоса нет.")
+    return "\n".join(lines)
+
+
+def render_whales(inp: SkillInput) -> str:
+    return _per_coin(inp, "🐋", "Киты", "киты", _whales)
+
+
 # --- реестр ------------------------------------------------------------------------------------
 
 ALL: tuple[BuiltinSkill, ...] = (
@@ -700,6 +826,36 @@ ALL: tuple[BuiltinSkill, ...] = (
         ("вола", "волатильн"),
         needs_ta=True,
         words=re.compile(r"(?i)(?<!\w)(волатильн\w*|сжати[еяю]|squeeze|боллинджер\w*|bollinger)(?!\w)"),
+    ),
+    BuiltinSkill(
+        "ликвидации",
+        "💥",
+        "сколько лонгов и шортов вынесли за сутки и в последние минуты",
+        "Расскажи о ликвидациях по данным бота: кого выносили — лонги или шорты, больше ли обычного, и что это "
+        "значит для цены (чистка перед отскоком или топливо для движения). Цифры бери только из данных бота.",
+        render_liquidations,
+        ("ликвы", "ликвидация"),
+        words=re.compile(r"(?i)(?<!\w)(ликвидаци\w*|ликвы|liquidations?)(?!\w)"),
+    ),
+    BuiltinSkill(
+        "разлоки",
+        "🔓",
+        "ближайшие разлоки токенов и давление на цену",
+        "Расскажи о разлоках по данным бота: когда, сколько и кому разблокируют, какая это доля капитализации и чем "
+        "грозит цене. Цифры бери только из данных бота.",
+        render_unlocks,
+        ("разлок", "анлоки", "unlocks"),
+        words=re.compile(r"(?i)(?<!\w)(разлок\w*|анлок\w*|unlocks?|вестинг\w*)(?!\w)"),
+    ),
+    BuiltinSkill(
+        "киты",
+        "🐋",
+        "крупные переводы за час: на биржи (продажа) и с бирж (накопление)",
+        "Расскажи о китах по данным бота: сколько крупных монет занесли на биржи и вывели с них за час, кто самые "
+        "крупные, что это может значить для цены. Цифры бери только из данных бота.",
+        render_whales,
+        ("кит", "whales"),
+        words=re.compile(r"(?i)(?<!\w)(кит(?:ы|ов|ам|ах)?|whales?)(?!\w)"),
     ),
     BuiltinSkill(
         "новости",

@@ -471,11 +471,3 @@ planned(
     "kaiko", "Kaiko", Category.AGGREGATOR, "https://www.kaiko.com", key="KAIKO_API_KEY", note="институциональные данные"
 )
 planned("amberdata", "Amberdata", Category.AGGREGATOR, "https://www.amberdata.io", key="AMBERDATA_API_KEY")
-planned(
-    "tokenomist",
-    "Tokenomist (Token Unlocks)",
-    Category.AGGREGATOR,
-    "https://tokenomist.ai",
-    key="TOKENOMIST_API_KEY",
-    note="разлоки токенов",
-)

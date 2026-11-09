@@ -254,14 +254,6 @@ planned(
 )
 planned("intotheblock", "IntoTheBlock", Category.ONCHAIN, "https://www.intotheblock.com", key="ITB_API_KEY")
 planned(
-    "whale_alert",
-    "Whale Alert",
-    Category.ONCHAIN,
-    "https://whale-alert.io",
-    key="WHALE_ALERT_API_KEY",
-    note="крупные переводы",
-)
-planned(
     "helius",
     "Helius",
     Category.ONCHAIN,

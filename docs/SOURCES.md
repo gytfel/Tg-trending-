@@ -2,7 +2,7 @@
 
 > Файл сгенерирован командой `python -m bot.sources.probe --catalog docs/SOURCES.md`.
 
-Всего: **233** · ✅ подключено без ключа: **135** · 🔑 подключено, нужен ключ: **14** · 🛠 в планах: **84**
+Всего: **234** · ✅ подключено без ключа: **136** · 🔑 подключено, нужен ключ: **17** · 🛠 в планах: **81**
 
 
 ## 📊 Агрегаторы (26)
@@ -27,6 +27,7 @@
 | `coinstats` | [CoinStats](https://coinstats.app) | 🔑 `COINSTATS_API_KEY` | тикер |  |
 | `cryptocompare` | [CryptoCompare (CoinDesk Data)](https://www.cryptocompare.com) | 🔑 `CRYPTOCOMPARE_API_KEY` | тикер | платная подписка CoinDesk Data |
 | `livecoinwatch` | [LiveCoinWatch](https://www.livecoinwatch.com) | 🔑 `LIVECOINWATCH_API_KEY` | тикер |  |
+| `tokenomist` | [Tokenomist — разлоки](https://tokenomist.ai) | 🔑 `TOKENOMIST_API_KEY` | тикер | ближайшие разлоки токенов, платный API |
 | `coincodex` | [CoinCodex](https://coincodex.com) | 🛠 в планах | — |  |
 | `dropstab` | [DropsTab](https://dropstab.com) | 🛠 в планах | — | анлоки, инвесторы |
 | `amberdata` | [Amberdata](https://www.amberdata.io) | 🛠 в планах | — |  |
@@ -34,7 +35,6 @@
 | `kaiko` | [Kaiko](https://www.kaiko.com) | 🛠 в планах | — | институциональные данные |
 | `messari` | [Messari](https://messari.io) | 🛠 в планах | — | профили, токеномика |
 | `mobula` | [Mobula](https://mobula.io) | 🛠 в планах | — |  |
-| `tokenomist` | [Tokenomist (Token Unlocks)](https://tokenomist.ai) | 🛠 в планах | — | разлоки токенов |
 
 ## 🏦 Биржи (спот) (40)
 
@@ -81,7 +81,7 @@
 | `toobit` | [Toobit](https://www.toobit.com) | 🛠 в планах | — |  |
 | `woox` | [WOO X](https://woox.io) | 🛠 в планах | — |  |
 
-## 📈 Деривативы (31)
+## 📈 Деривативы (32)
 
 | id | Источник | Статус | Запросы | Примечание |
 |---|---|---|---|---|
@@ -107,13 +107,14 @@
 | `kraken_futures` | [Kraken Futures](https://futures.kraken.com) | ✅ | тикер |  |
 | `kucoin_futures` | [KuCoin Futures](https://futures.kucoin.com) | ✅ | тикер |  |
 | `mexc_futures` | [MEXC Futures](https://futures.mexc.com) | ✅ | тикер |  |
+| `okx_liquidations` | [OKX — ликвидации](https://www.okx.com) | ✅ | тикер | последние 100 ликвидаций, без ключа |
 | `okx_ls` | [OKX L/S аккаунтов](https://www.okx.com) | ✅ | тикер |  |
 | `okx_swap` | [OKX Swap](https://www.okx.com) | ✅ | тикер |  |
+| `coinglass` | [CoinGlass — ликвидации](https://www.coinglass.com) | 🔑 `COINGLASS_API_KEY` | тикер | ликвидации по всем крупным биржам, платный API (от ~$29/мес) |
 | `cme_btc` | [CME Bitcoin Futures](https://www.cmegroup.com) | 🛠 в планах | — | COT, базис |
 | `drift` | [Drift](https://www.drift.trade) | 🛠 в планах | — |  |
 | `gmx` | [GMX](https://gmx.io) | 🛠 в планах | — |  |
 | `vertex` | [Vertex](https://vertexprotocol.com) | 🛠 в планах | — |  |
-| `coinglass` | [CoinGlass](https://www.coinglass.com) | 🛠 в планах | — | ликвидации, агрегированный OI |
 | `laevitas` | [Laevitas](https://www.laevitas.ch) | 🛠 в планах | — | опционы |
 | `velo` | [Velo Data](https://velo.xyz) | 🛠 в планах | — |  |
 
@@ -172,6 +173,7 @@
 | `solana_holders` | [Solana RPC — держатели](https://solana.com/docs/rpc) | ✅ | контракт |  |
 | `solana_tps` | [Solana RPC — TPS](https://solana.com/docs/rpc) | ✅ | тикер |  |
 | `etherscan` | [Etherscan](https://etherscan.io) | 🔑 `ETHERSCAN_API_KEY` | тикер |  |
+| `whale_alert` | [Whale Alert — киты](https://whale-alert.io) | 🔑 `WHALE_ALERT_API_KEY` | тикер | крупные переводы за последний час (от $500K) |
 | `bitinfocharts` | [BitInfoCharts](https://bitinfocharts.com) | 🛠 в планах | — | богатейшие адреса, парсинг HTML |
 | `ultrasound` | [ultrasound.money](https://ultrasound.money) | 🛠 в планах | — | эмиссия/сжигание ETH |
 | `alchemy` | [Alchemy](https://www.alchemy.com) | 🛠 в планах | — |  |
@@ -186,7 +188,6 @@
 | `nansen` | [Nansen](https://www.nansen.ai) | 🛠 в планах | — | smart money |
 | `tonapi` | [TonAPI](https://tonapi.io) | 🛠 в планах | — |  |
 | `tronscan` | [Tronscan](https://tronscan.org) | 🛠 в планах | — |  |
-| `whale_alert` | [Whale Alert](https://whale-alert.io) | 🛠 в планах | — | крупные переводы |
 
 ## 🛡 Безопасность (9)
 
