@@ -1051,3 +1051,21 @@ async def test_paused_source_is_skipped_and_shown(env):
     assert not any("api.binance.com/api/v3/ticker" in c[1] for c in svc.http.calls)  # на паузе — не спрашивали
     await feed(cb("rp:sources", message_id=max(svc.reports)[1]))
     assert "⏸ На паузе после ошибок, не опрашивались: binance (HTTP 403" in session.last().text
+
+
+async def test_cached_ai_answer_is_still_typed(registry, dispatcher):
+    hub = StreamingHub()
+    session, feed, svc = await make_env(
+        registry, dispatcher, hub=hub, report_style="card", stream_answers=True, stream_interval=0.01
+    )
+    svc.analyzer.ai_ttl = 180
+    try:
+        await feed(msg("разбери BTC"))
+        streamed = hub.streamed
+        before = len(session.requests)
+        await feed(msg("разбери BTC"))
+        assert hub.streamed == streamed  # второй раз модель не вызывалась
+        edits = [r for r in session.requests[before:] if isinstance(r, EditMessageCaption)]
+        assert len(edits) >= 2 and edits[-1].caption.startswith("BTC держится у <b>$100K</b>")  # но текст «печатается»
+    finally:
+        await svc.db.close()

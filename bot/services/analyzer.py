@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import time
-from collections import Counter
+from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -132,8 +134,12 @@ class Analyzer:
         source_timeout: float = 8.0,
         deadline: float = 15.0,
         health: Health | None = None,
+        ai_cache_seconds: float = 0,
     ) -> None:
         self.health = health  # «медкарта» источников: сломанные на паузе не ждём
+        # тот же вопрос за последние минуты — ответ ИИ берём готовым (AI_CACHE_SECONDS, 0 — выкл.)
+        self.ai_ttl = ai_cache_seconds
+        self._ai_cache: OrderedDict[str, tuple[float, list[swarm.AgentResult], str | None]] = OrderedDict()
         self.http = http
         self.registry = registry
         self.llm = llm
@@ -381,6 +387,46 @@ class Analyzer:
             body = skills_builtin.caption(body.split("\n\n", 1)[0], skill_blocks, limit)
         return head + ("\n\n" if head and body else "") + body
 
+    # -- кэш ответа ИИ ------------------------------------------------------------------------------
+
+    def _ai_key(self, q: ParsedQuery, snaps: list[Snapshot], skills: list[Skill], use_swarm: bool) -> str | None:
+        """Один и тот же вопрос по тем же монетам, с теми же навыками и цифрами навыков → тот же ответ."""
+        if self.ai_ttl <= 0:
+            return None
+        raw = [
+            " ".join(q.raw.lower().split()),
+            [(s.asset.symbol, s.asset.contract) for s in snaps if s.asset],
+            [(s.name, s.content) for s in skills],
+            use_swarm,
+            str(getattr(self.llm, "ref", "")),  # другая модель — другой ответ
+        ]
+        return hashlib.sha256(json.dumps(raw, ensure_ascii=False, default=str).encode()).hexdigest()
+
+    def _ai_get(self, key: str | None) -> tuple[list[swarm.AgentResult], str | None] | None:
+        if key is None or (hit := self._ai_cache.get(key)) is None:
+            return None
+        expires, agents, text = hit
+        if expires < time.monotonic():
+            self._ai_cache.pop(key, None)
+            return None
+        return agents, text
+
+    def _ai_put(self, key: str | None, agents: list[swarm.AgentResult], text: str | None, keep: int = 300) -> None:
+        if key is None:
+            return
+        self._ai_cache[key] = (time.monotonic() + self.ai_ttl, agents, text)
+        self._ai_cache.move_to_end(key)
+        while len(self._ai_cache) > keep:
+            self._ai_cache.popitem(last=False)
+
+    @staticmethod
+    async def _replay(text: str, on_text, steps: int = 12, delay: float = 0.08) -> None:
+        """Готовый ответ показываем так же, как генерацию, — быстрым «допечатыванием»."""
+        words = text.split(" ")
+        for i in range(1, steps + 1):
+            await on_text(" ".join(words[: max(1, len(words) * i // steps)]))
+            await asyncio.sleep(delay)
+
     async def _verdict(
         self,
         q: ParsedQuery,
@@ -400,7 +446,13 @@ class Analyzer:
         """
         blocks: list[str] = []
         agents: list[swarm.AgentResult] = []
-        if use_swarm and self.swarm is not None and self.swarm.enabled:
+        key = self._ai_key(q, snaps, skills, use_swarm) if (self.llm.enabled or use_swarm) else None
+        hit = self._ai_get(key)
+        if hit is not None:
+            agents = hit[0]
+            log.info("ai cache hit for %r", q.raw[:60])
+            await progress.step("⚡", "Такой же вопрос задавали только что — беру свежий ответ ИИ")
+        elif use_swarm and self.swarm is not None and self.swarm.enabled:
 
             async def started(roles: list[swarm.Role]) -> None:
                 await progress.step("🐝", "Подключаю агентов: " + ", ".join(r.title.lower() for r in roles))
@@ -416,8 +468,8 @@ class Analyzer:
             except Exception:  # noqa: BLE001
                 log.exception("swarm failed")
                 agents = []
-            if agents:
-                blocks.append(swarm.render(agents))
+        if agents:
+            blocks.append(swarm.render(agents))
         answered = [a.as_dict() for a in agents if a.ok]
 
         if self.llm.enabled:
@@ -440,17 +492,26 @@ class Analyzer:
                         await live.begin(card, caption_head, text_prefix)
                     await live.update(to_html(acc))
 
-            try:
-                text = await self.llm.verdict(
-                    q.raw, report.llm_context(snaps, g), skills, agents=answered or None, on_text=on_text
-                )
-            except Exception:  # noqa: BLE001
-                log.exception("LLM verdict failed")
-                text = None
+            if hit is not None and hit[1]:
+                text = hit[1]
+                if on_text is not None:
+                    await self._replay(text, on_text)
+            else:
+                try:
+                    text = await self.llm.verdict(
+                        q.raw, report.llm_context(snaps, g), skills, agents=answered or None, on_text=on_text
+                    )
+                except Exception:  # noqa: BLE001
+                    log.exception("LLM verdict failed")
+                    text = None
+                if text:  # неудачный ответ не кэшируем — следующий вопрос попробует снова
+                    self._ai_put(key, agents, text)
             if text:
                 ai_html = to_html(text)
                 blocks.append(f"{title}\n{ai_html}")
                 return "\n\n".join(blocks), True, agents, ai_html
+        elif hit is None and agents:  # ИИ-итога нет, но агенты ответили — их тоже не зовём повторно
+            self._ai_put(key, agents, None)
         if snaps:
             await progress.step("✍️", "Пишу ответ")
             bullets = "\n".join(f"• {esc(b)}" for b in report.rule_verdict(snaps, g))

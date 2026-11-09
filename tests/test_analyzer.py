@@ -1,5 +1,6 @@
 """Конвейер целиком на подставных ответах API (без сети и без ИИ)."""
 
+import time
 from datetime import UTC, datetime
 
 import pytest
@@ -203,3 +204,48 @@ async def test_builtin_skill_goes_to_ai_with_bot_numbers(registry):
     assert skills[0].content.startswith("Помоги с риск-менеджментом") and "Депозит $2" in skills[0].content
     assert "⚖️ <b>Риск · BTC</b>" in res.text and "🤖 <b>Вывод</b> · навык: риск" in res.text
     assert res.caption.startswith("🧠 Навык: риск")  # с ИИ подпись пишет модель
+
+
+class CountingLLM(StubLLM):
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    async def verdict(self, question, context, skills, agents=None, on_text=None):
+        self.calls += 1
+        return await super().verdict(question, context, skills, agents, on_text)
+
+
+async def test_ai_answer_cache(registry, monkeypatch):
+    reg = small_registry(registry, ["binance", "coingecko"])
+    llm = CountingLLM()
+    an = Analyzer(btc_http(), reg, llm, deadline=3, ai_cache_seconds=180)
+    first = await an.analyze(parse_query("разбери  BTC"), [])
+    second = await an.analyze(parse_query("Разбери BTC"), [])  # регистр и пробелы не важны
+    assert llm.calls == 1 and first.caption == second.caption and second.used_llm
+    await an.analyze(parse_query("стоит ли брать BTC"), [])  # другой вопрос — новый ответ
+    assert llm.calls == 2
+    clock = time.monotonic() + 181
+    monkeypatch.setattr("bot.services.analyzer.time.monotonic", lambda: clock)
+    await an.analyze(parse_query("разбери BTC"), [])  # прошло 3 минуты — ответ устарел
+    assert llm.calls == 3
+
+
+async def test_ai_cache_off_and_failed_answers_not_cached(registry):
+    reg = small_registry(registry, ["binance", "coingecko"])
+    llm = CountingLLM()
+    off = Analyzer(btc_http(), reg, llm, deadline=3, ai_cache_seconds=0)
+    await off.analyze(parse_query("BTC"), [])
+    await off.analyze(parse_query("BTC"), [])
+    assert llm.calls == 2
+
+    class Failing(CountingLLM):
+        async def verdict(self, *a, **kw):
+            self.calls += 1
+            return None
+
+    bad = Failing()
+    an = Analyzer(btc_http(), reg, bad, deadline=3, ai_cache_seconds=180)
+    await an.analyze(parse_query("BTC"), [])
+    await an.analyze(parse_query("BTC"), [])
+    assert bad.calls == 2  # неудачный ответ не запоминаем

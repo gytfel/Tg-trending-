@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     vision_model: str = ""  # кто читает скриншоты графиков; пусто — главный аналитик (LLM_MODEL)
     llm_effort: str = "medium"  # low | medium | high | xhigh | max; пусто — не передавать
     llm_timeout: float = 90.0
+    ai_cache_seconds: float = 180  # тот же вопрос за 3 мин — готовый ответ ИИ без новых вызовов (0 — выкл.)
 
     # Рой агентов: специалисты по деривативам, рынку, ончейну, новостям и рискам
     # auto (или swarm) — рой на сложные вопросы, на простые — один аналитик;

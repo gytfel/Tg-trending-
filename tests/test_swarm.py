@@ -308,3 +308,18 @@ async def test_analyzer_auto_mode_saves_calls(registry):
     hub, res = await run("разбери BTC подробно")
     assert {role for _, role, _ in hub.calls} == {"market", "derivatives", "news"}
     assert "🐝 <b>Рой агентов</b>" in res.text and "🤖 <b>Итог</b>" in res.text
+
+
+async def test_swarm_and_lead_answers_are_cached(registry):
+    from tests.test_analyzer import btc_http, small_registry
+
+    hub = LeadHub()
+    reg = small_registry(registry, ["binance", "bybit", "coingecko", "bybit_linear", "fear_greed", "coindesk"])
+    swarm = Swarm(hub, default_model="claude-haiku-5-5", bot_name="Trending")
+    llm = LLM(hub, "claude-opus-5-5", "medium", "Trending")
+    an = Analyzer(btc_http(), reg, llm, swarm=swarm, deadline=3, ai_cache_seconds=180)
+    first = await an.analyze(parse_query("разбери BTC"), [])
+    calls = len(hub.calls)
+    second = await an.analyze(parse_query("разбери BTC"), [])
+    assert len(hub.calls) == calls  # ни агенты, ни главный аналитик повторно не вызывались
+    assert "🐝 <b>Рой агентов</b>" in second.text and second.caption == first.caption

@@ -72,8 +72,8 @@ def fmt_change(x: float | None) -> str:
 def fmt_num(x: float | int | str | None) -> str:
     if x is None:
         return "—"
-    if isinstance(x, str):
-        return x
+    if isinstance(x, str):  # строка из API — экранируем, иначе «<» или «&» сломают HTML отчёта
+        return esc(x)
     if isinstance(x, int) or float(x).is_integer():
         return _group(float(x), 0)
     return f"{x:.2f}"

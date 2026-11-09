@@ -49,3 +49,10 @@ def test_split_message_respects_limit_and_blocks():
 
 def test_split_message_short_text_untouched():
     assert split_message("hello") == ["hello"]
+
+
+def test_fmt_num_escapes_strings_from_api():
+    from bot.formatting import fmt_num
+
+    assert fmt_num("<b>x</b> & y") == "&lt;b&gt;x&lt;/b&gt; &amp; y"
+    assert fmt_num(1234) == fmt_num(1234.0) and fmt_num(None) == "—"

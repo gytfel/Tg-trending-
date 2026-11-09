@@ -76,6 +76,7 @@ async def build_services(settings: Settings) -> Services:
         source_timeout=settings.source_timeout,
         deadline=settings.collect_deadline,
         health=health,
+        ai_cache_seconds=settings.ai_cache_seconds,
     )
     return Services(
         settings=settings,

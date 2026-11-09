@@ -12,6 +12,7 @@
 #   SERVICE=tg-trending       имя systemd-сервиса и команды управления
 #   APP_USER=tgbot            системный пользователь, от которого работает бот
 #   BOT_TOKEN=... ANTHROPIC_API_KEY=... ADMIN_IDS=...   чтобы не отвечать на вопросы
+#     (секреты — через export и sudo --preserve-env, а не в команде: её видно в ps)
 #   RECONFIGURE=1             заново спросить токен и ключи
 #   USE_UV=1                  поставить отдельный Python через uv, даже если системный подходит
 #   SKIP_PROBE=1              не проверять источники данных в конце
@@ -145,9 +146,12 @@ chmod 640 "$ENV_FILE"
 
 get_env() { sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1; }
 set_env() {
-  "$VENV/bin/python" - "$ENV_FILE" "$1" "$2" <<'PY'
-import pathlib, re, sys
-path, key, value = sys.argv[1:]
+  # значение (токен, ключи) — через переменную окружения, а не аргументом: аргументы процесса
+  # видны всем пользователям сервера в `ps`, а окружение — только root и самому процессу
+  __SET_ENV_VALUE="$2" "$VENV/bin/python" - "$ENV_FILE" "$1" <<'PY'
+import os, pathlib, re, sys
+path, key = sys.argv[1:]
+value = os.environ["__SET_ENV_VALUE"]
 p = pathlib.Path(path)
 lines = p.read_text(encoding="utf-8").splitlines()
 for i, line in enumerate(lines):
@@ -182,7 +186,7 @@ if [ "${RECONFIGURE:-0}" = 1 ] && [ -z "${BOT_TOKEN:-}" ]; then
 fi
 for attempt in 1 2 3; do
   if ! token_format_ok "$TOKEN"; then
-    has_tty || die "BOT_TOKEN не задан или неверного вида. Запусти так: sudo BOT_TOKEN=123456:ABC... bash $0"
+    has_tty || die "BOT_TOKEN не задан или неверного вида. Запусти так: export BOT_TOKEN=...; sudo --preserve-env=BOT_TOKEN bash $0"
     [ "$attempt" = 1 ] && info "Токен бота выдаёт @BotFather в Telegram (команда /newbot)."
     ask TOKEN "    Вставь токен бота (ввод скрыт): " secret
     token_format_ok "$TOKEN" || { warn "Не похоже на токен: нужен вид 123456789:AAH...xyz"; TOKEN=""; continue; }
