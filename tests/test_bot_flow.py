@@ -937,7 +937,7 @@ async def test_takes_by_words_in_card(card_env):
     with_candles(svc)
     await feed(msg("тейки по BTC"))
     photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
-    assert "🎯 <b>Сетап · BTC</b> — 🟢 лонг" in photo.caption
+    assert "🎯 <b>Сетап · BTC · 4ч</b> — 🟢 лонг" in photo.caption
     assert "Тейк 1:" in photo.caption and "R:R" in photo.caption and "Стоп:" in photo.caption
     assert (await svc.quota.status(UID)).used == 1
 
@@ -947,7 +947,7 @@ async def test_technical_analysis_in_text_report(env):
     with_candles(svc)
     await feed(msg("BTC навык теханализ"))
     text = session.last().text
-    assert "📐 <b>Теханализ · BTC</b>" in text and "RSI 4ч" in text and "Поддержки:" in text
+    assert "📐 <b>Теханализ · BTC · 4ч</b>" in text and "RSI 4ч" in text and "Поддержки:" in text
 
 
 async def test_takes_without_candles_explains(env):
@@ -1150,3 +1150,22 @@ async def test_news_watch_by_words_and_off_from_alert(env):
     await feed(cb(f"wt:off:{w.id}:"))
     assert (await svc.db.find_watch(UID, "TON", "news")) is None
     assert any(isinstance(r, AnswerCallbackQuery) and r.text == "🔕 Больше не присылаю" for r in session.requests)
+
+
+async def test_divergences_and_timeframe_in_takes(env):
+    session, feed, svc = env
+    with_candles(svc)
+    await feed(msg("есть дивер на BTC?"))
+    assert "〽️ <b>Дивергенции · BTC</b>" in session.last().text
+    await feed(msg("тейки BTC 1ч"))
+    assert "🎯 <b>Сетап · BTC · 1ч</b>" in session.last().text
+    asked = {p["interval"] for _, url, p in svc.http.calls if "klines" in url and p}
+    assert {"1h", "4h"} <= asked  # часовики + старший 4ч для тренда
+
+
+async def test_volatility_skill(env):
+    session, feed, svc = env
+    with_candles(svc)
+    await feed(msg("волатильность BTC"))
+    text = session.last().text
+    assert "🌪 <b>Волатильность · BTC · 4ч</b>" in text and "Обычный ход: за сутки" in text

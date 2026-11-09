@@ -607,7 +607,7 @@ def render_scam(inp: SkillInput) -> str:
 # --- 📐 теханализ и 🎯 тейки ---------------------------------------------------------------------
 
 
-def _with_ta(inp: SkillInput, icon: str, name: str, key: str, draw: Callable[[tech.TA, str], str]) -> str:
+def _with_ta(inp: SkillInput, icon: str, name: str, key: str, draw: Callable[[tech.TA, str, Snapshot], str]) -> str:
     if not inp.snaps:
         return _need_coin(icon, name, key)
     blocks = []
@@ -617,21 +617,35 @@ def _with_ta(inp: SkillInput, icon: str, name: str, key: str, draw: Callable[[te
         if a and a.contract:
             blocks.append(f"{_title(icon, name, s)}\nДля токенов по контракту свечей бирж нет — нужен тикер с биржи.")
         elif (t := inp.ta.get(sym)) is not None:
-            blocks.append(draw(t, sym))
+            blocks.append(draw(t, sym, s))
         else:
             blocks.append(
                 f"{_title(icon, name, s)}\nСвечей пары {esc(sym)}/USDT на Binance и Bybit нет "
-                "или истории мало (меньше 50 свечей 4ч)."
+                "или истории мало (меньше 50 свечей)."
             )
     return "\n\n".join(blocks)
 
 
 def render_ta(inp: SkillInput) -> str:
-    return _with_ta(inp, "📐", "Теханализ", "теханализ", tech.render_ta)
+    return _with_ta(inp, "📐", "Теханализ", "теханализ", lambda t, sym, s: tech.render_ta(t, sym))
 
 
 def render_takes(inp: SkillInput) -> str:
-    return _with_ta(inp, "🎯", "Сетап", "тейки", tech.render_setup)
+    return _with_ta(inp, "🎯", "Сетап", "тейки", lambda t, sym, s: tech.render_setup(t, sym))
+
+
+def render_divs(inp: SkillInput) -> str:
+    return _with_ta(inp, "〽️", "Дивергенции", "дивергенции", lambda t, sym, s: tech.render_divergences(t, sym))
+
+
+def render_vol(inp: SkillInput) -> str:
+    return _with_ta(
+        inp,
+        "🌪",
+        "Волатильность",
+        "волатильность",
+        lambda t, sym, s: tech.render_volatility(t, sym, _num(s.metric("dvol"))),
+    )
 
 
 # --- реестр ------------------------------------------------------------------------------------
@@ -663,6 +677,29 @@ ALL: tuple[BuiltinSkill, ...] = (
             r"(?i)(?<!\w)(теханализ\w*|тех\.? ?анализ\w*|технический анализ|уровн[иья]|rsi|macd|макд|ema|"
             r"поддержк[аиу]|сопротивлени[ея])(?!\w)"
         ),
+    ),
+    BuiltinSkill(
+        "дивергенции",
+        "〽️",
+        "расхождения цены и RSI: рост или падение выдыхается — или тренд продолжится",
+        "Расскажи о дивергенциях по расчёту бота: какие нашлись, на каком таймфрейме, насколько сильные и что это "
+        "значит для цены. Подчеркни, что это предупреждение, а не точка входа, и назови уровень, который подтвердит "
+        "сценарий. Цифры бери только из расчёта бота.",
+        render_divs,
+        ("дивер", "дивергенция", "дивы"),
+        needs_ta=True,
+        words=re.compile(r"(?i)(?<!\w)(дивер\w*|divergen\w*)(?!\w)"),
+    ),
+    BuiltinSkill(
+        "волатильность",
+        "🌪",
+        "сжатие перед движением, обычный ход за сутки и неделю, спокойнее или нервнее обычного",
+        "Оцени волатильность по расчёту бота: сжатие или разгон полос Боллинджера, обычный ход за сутки и неделю, "
+        "спокойнее или нервнее обычного. Что это значит для размера позиции и стопа. Цифры бери только из расчёта бота.",
+        render_vol,
+        ("вола", "волатильн"),
+        needs_ta=True,
+        words=re.compile(r"(?i)(?<!\w)(волатильн\w*|сжати[еяю]|squeeze|боллинджер\w*|bollinger)(?!\w)"),
     ),
     BuiltinSkill(
         "новости",

@@ -42,3 +42,28 @@ def ta_http(symbol: str = "BTC", drift: float = 0.003, wave: float = 0.05) -> Fa
             (h4 if params["interval"] == "4h" else d1) if params["symbol"] == f"{symbol}USDT" else []
         ),
     )
+
+
+def bearish_divergence_closes() -> list[float]:
+    """Резкий рост к первому пику (RSI высоко), откат, вялый рост к чуть более высокому пику (RSI ниже), спад."""
+    out = [100 + math.sin(i / 3) * 0.4 for i in range(100)]
+    out += [100 + 2 * i for i in range(1, 11)]  # 100 → 120 за 10 свечей
+    out += [120 - i for i in range(1, 11)]  # откат до 110
+    out += [110 + 0.75 * i for i in range(1, 16)]  # вялый рост до 121.25
+    out += [121.25 - 1.2 * i for i in range(1, 6)]  # спад — второй пик подтверждён
+    return out
+
+
+def squeeze_closes() -> list[float]:
+    """Волны с затуханием: в конце полосы Боллинджера узкие — сжатие."""
+    return [100 * (1 + 0.04 * math.sin(i / 4) * max(0.05, 1 - i / 230)) for i in range(260)]
+
+
+def frame_http(base: list[list], higher: list[list], symbol: str = "BTC") -> FakeHttp:
+    """Свечи рабочего таймфрейма (4h) и старшего (остальные интервалы)."""
+    return FakeHttp().add(
+        "api.binance.com/api/v3/klines",
+        lambda url, params, body: (
+            (base if params["interval"] == "4h" else higher) if params["symbol"] == f"{symbol}USDT" else []
+        ),
+    )

@@ -46,7 +46,7 @@ async def coin_facts(svc: Services, caption: str) -> tuple[str | None, str]:
     if sym is None:
         return None, ""
     try:
-        t = await ta.analyze_symbol(svc.http, sym)
+        t = await ta.analyze_symbol(svc.http, sym, ta.timeframe_from(caption))  # «SOL 1ч» — по часовикам
     except Exception:  # noqa: BLE001 — без цифр модель всё равно прочитает картинку
         log.exception("chart: ta for %s failed", sym)
         t = None

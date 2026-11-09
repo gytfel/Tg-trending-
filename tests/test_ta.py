@@ -47,7 +47,7 @@ def test_pivots_and_levels_cluster():
 @pytest.mark.parametrize("drift", [0.003, -0.003, 0.0])
 async def test_setup_is_consistent(drift):
     t = await ta.analyze_symbol(ta_http(drift=drift), "BTC")
-    assert t is not None and t.d1 is not None
+    assert t is not None and t.higher is not None
     s = ta.setup(t)
     sign = 1 if s.side == "long" else -1
     assert (s.entry - s.stop) * sign >= t.unit * 0.99  # стоп не ближе 1 ATR и с нужной стороны
@@ -74,7 +74,7 @@ async def test_trend_direction():
 
 async def test_overbought_waits_for_pullback():
     t = await ta.analyze_symbol(ta_http(drift=0.003), "BTC")
-    t.h4.rsi = 82
+    t.base.rsi = 82
     s = ta.setup(t)
     assert s.entry < t.price and "на откате" in s.entry_note
 
@@ -86,3 +86,105 @@ async def test_bybit_fallback_and_too_little_history():
     assert len(cs) == 120 and cs[0].close < cs[-1].close
     short = FakeHttp().add("api.binance.com/api/v3/klines", klines([1.0 + i for i in range(20)], 1))
     assert await ta.analyze_symbol(short, "NEW") is None  # мало истории — теханализа нет
+
+
+# --- таймфреймы, дивергенции, волатильность ----------------------------------------------------------
+
+from tests.ta_fixtures import (  # noqa: E402
+    D1,
+    H4,
+    bearish_divergence_closes,
+    daily,
+    frame_http,
+    squeeze_closes,
+)
+
+
+@pytest.mark.parametrize(
+    ("text", "tf"),
+    [
+        ("тейки по BTC", "4h"),
+        ("тейки BTC 1ч", "1h"),
+        ("SOL 1h скальп", "1h"),
+        ("теханализ ETH дневка", "1d"),
+        ("BTC 1д", "1d"),
+        ("BTC 4ч", "4h"),
+        ("уровни ETH на 4h", "4h"),
+        ("разбери BTC за 11 часов назад", "4h"),  # «часов» — не таймфрейм
+        ("тейки на часовике", "1h"),
+    ],
+)
+def test_timeframe_from(text, tf):
+    assert ta.timeframe_from(text) == tf
+
+
+def test_series_match_last_values():
+    closes = [100 + (i % 7) - (i % 3) for i in range(80)]
+    cs = [Candle(i, c, c + 1, c - 1, c, 1) for i, c in enumerate(closes)]
+    assert ta.rsi_series(closes)[-1] == pytest.approx(ta.rsi(closes))
+    assert ta.atr_series(cs)[-1] == pytest.approx(ta.atr(cs))
+    ms = ta.macd_series(closes)
+    assert len(ms) == len(closes) and ms[-1] == pytest.approx(ta.macd(closes)[-1])
+    w = ta.bollinger_width([100.0] * 25)
+    assert w[-1] == 0 and w[18] is None
+
+
+async def test_analyze_symbol_timeframes():
+    http = ta_http(drift=0.003)
+    t = await ta.analyze_symbol(http, "BTC", "1h")
+    asked = {p["interval"] for _, url, p in http.calls if "klines" in url}
+    assert asked == {"1h", "4h"} and t.base.name == "1ч" and t.higher.name == "4ч" and t.tf == "1h"
+    assert "Сетап · BTC · 1ч" in ta.render_setup(t, "BTC") and "закрытие 1ч свечи" in ta.render_setup(t, "BTC")
+    d = await ta.analyze_symbol(ta_http(drift=0.003), "BTC", "1d")
+    assert d.base.name == "1д" and "RSI 1д" in ta.render_ta(d, "BTC")
+
+
+async def bearish():
+    rows = klines(bearish_divergence_closes(), H4, wick=0.002)
+    return await ta.analyze_symbol(frame_http(rows, klines(daily(300, 60, 0.003, 0.05), D1)), "BTC")
+
+
+async def test_bearish_divergence_found_and_strong():
+    t = await bearish()
+    (d,) = [x for x in t.divs if x.frame == "4ч"]
+    assert d.kind == "bear" and d.p2 > d.p1 and d.r2 < d.r1 - 3
+    assert d.macd_ok and d.volume_ok and d.zone_ok and d.strength == "высокая" and d.age <= 10
+    out = ta.render_divergences(t, "BTC")
+    assert_tg_html(out)
+    assert "🔴 <b>медвежья</b>" in out and "MACD подтверждает" in out and "вероятен откат к поддержке" in out
+    assert "Дивергенции: 4ч 🔴 медвежья (сила высокая)" in ta.render_ta(t, "BTC")
+
+
+async def test_bullish_divergence_is_mirror():
+    closes = [240 - c for c in bearish_divergence_closes()]  # зеркально: новый минимум ниже, RSI выше
+    rows = klines(closes, H4, wick=0.002)
+    t = await ta.analyze_symbol(frame_http(rows, klines(daily(300, 60, 0.003, 0.05), D1)), "BTC")
+    assert [d.kind for d in t.divs if d.frame == "4ч"] == ["bull"]
+
+
+async def test_setup_warns_about_divergence_against():
+    t = await bearish()
+    s = ta.setup(t)
+    if s.side == "long":
+        assert s.entry < t.price and "дивергенция" in s.entry_note and s.warning.startswith("⚠️ Против лонга")
+    assert "⚠️" in ta.render_setup(t, "BTC") or s.side == "short"
+
+
+async def test_no_fresh_divergence_message():
+    t = await ta.analyze_symbol(ta_http(drift=0.003), "BTC")
+    t.divs = []
+    out = ta.render_divergences(t, "BTC")
+    assert "4ч: свежих нет" in out and "Итог" not in out
+
+
+async def test_volatility_squeeze_and_expansion():
+    higher = klines(daily(300, 100, 0.0, 0.05), D1)
+    sq = await ta.analyze_symbol(frame_http(klines(squeeze_closes(), H4), higher), "BTC")
+    v = ta.volatility(sq)
+    assert v.width_rank <= ta.SQUEEZE and v.day_pct > 0 and v.week_pct == pytest.approx(v.day_pct * 7**0.5)
+    out = ta.render_volatility(sq, "BTC", dvol=45)
+    assert_tg_html(out)
+    assert "🔸 <b>Сжатие</b>" in out and "DVOL 45" in out
+    grow = [100 * (1 + 0.002 * i / 10 * ((i % 8) - 4)) for i in range(260)]  # качели всё шире
+    ex = await ta.analyze_symbol(frame_http(klines(grow, H4), higher), "BTC")
+    assert ta.volatility(ex).width_rank >= ta.EXPAND and "🔹 <b>Разгон</b>" in ta.render_volatility(ex, "BTC")

@@ -266,3 +266,9 @@ def test_for_ai_adds_bot_numbers():
     assert out[0].content.startswith("Только про ETF") and "📰 новости" in out[0].content  # свой текст + цифры
     assert out[1] is tejki
     assert out[2].content.startswith("Помоги с риск-менеджментом") and "позиция $800" in out[2].content
+
+
+def test_new_ta_skills_found_by_words():
+    found = [b.key for b in sb.find([], "есть дивер на SOL и какая волатильность")]
+    assert found == ["дивергенции", "волатильность"]
+    assert sb.get("дивер").key == "дивергенции" and sb.get("вола").key == "волатильность"

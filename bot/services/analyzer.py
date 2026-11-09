@@ -278,7 +278,8 @@ class Analyzer:
 
         kind = "compare" if compare else ("contract" if assets[0].contract else "asset")
         card = cards.build_card(kind, found, g)
-        tas = await self._ta(found) if any(b.needs_ta for b in builtins) else {}
+        # «тейки 1ч», «теханализ дневка» — рабочий таймфрейм из вопроса, по умолчанию 4ч
+        tas = await self._ta(found, ta.timeframe_from(q.raw)) if any(b.needs_ta for b in builtins) else {}
         blocks = skills_builtin.run(builtins, skills_builtin.SkillInput(kind, found, g, skill_text, tas))
         sections.extend(blocks.values())
         ai_skills = skills_builtin.for_ai(skills, builtins, blocks)
@@ -317,13 +318,13 @@ class Analyzer:
             caption=self._caption(kind, found, g, ai_html, agents, ai_skills, list(blocks.values())),
         )
 
-    async def _ta(self, found: list[Snapshot]) -> dict[str, ta.TA]:
+    async def _ta(self, found: list[Snapshot], tf: str = ta.DEFAULT_TF) -> dict[str, ta.TA]:
         """Свечи 4ч и 1д и теханализ — только для навыков, которым это нужно (теханализ, тейки)."""
         syms = [s.asset.symbol.upper() for s in found if s.asset and s.asset.symbol and not s.asset.contract]
 
         async def one(sym: str) -> ta.TA | None:
             try:
-                return await ta.analyze_symbol(self.http, sym)
+                return await ta.analyze_symbol(self.http, sym, tf)
             except Exception:  # noqa: BLE001 — без теханализа разбор всё равно нужен
                 log.exception("ta failed for %s", sym)
                 return None
