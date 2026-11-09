@@ -17,12 +17,13 @@ from aiogram.methods import (
     DeleteMessage,
     EditMessageCaption,
     EditMessageText,
+    GetFile,
     GetMe,
     SendMessage,
     SendMessageDraft,
     SendPhoto,
 )
-from aiogram.types import CallbackQuery, Chat, Message, MessageEntity, Update, User
+from aiogram.types import CallbackQuery, Chat, Document, File, Message, MessageEntity, PhotoSize, Update, User
 
 from bot.ai import AIHub
 from bot.app import build_dispatcher
@@ -39,6 +40,7 @@ from bot.sources.registry import Registry
 from tests.conftest import FakeHttp
 
 UID = 42
+IMAGE = b"\x89PNG fake chart"
 _ids = itertools.count(1000)
 
 
@@ -85,13 +87,15 @@ class FakeSession(BaseSession):
             return True
         if isinstance(method, GetMe):
             return BOT_USER
+        if isinstance(method, GetFile):
+            return File(file_id=method.file_id, file_unique_id="u", file_size=len(IMAGE), file_path="photos/1.jpg")
         return True
 
     async def close(self):
         pass
 
-    async def stream_content(self, *args, **kwargs):  # pragma: no cover
-        yield b""
+    async def stream_content(self, *args, **kwargs):  # скачивание файла (скриншота)
+        yield IMAGE
 
     def texts(self) -> list[str]:
         return [r.text for r in self.requests if isinstance(r, (SendMessage, EditMessageText))]
@@ -312,18 +316,18 @@ async def test_skill_creation_flow_and_usage(env):
     assert "Как назовём навык?" in session.last().text
     assert session.buttons() == ["✖ Отмена"]
 
-    await feed(msg("тейки"))
+    await feed(msg("мой стиль"))
     assert "Теперь пришли сам навык" in session.last().text
     await feed(msg("Дай три тейка и стоп"))
-    assert "Навык «<b>тейки</b>» сохранён" in session.last().text
+    assert "Навык «<b>мой стиль</b>» сохранён" in session.last().text
 
     skills = await svc.db.list_skills(UID)
-    assert [(s.name, s.content) for s in skills] == [("тейки", "Дай три тейка и стоп")]
+    assert [(s.name, s.content) for s in skills] == [("мой стиль", "Дай три тейка и стоп")]
 
     await feed(cb("nav:skills"))
-    assert "📘 тейки" in session.buttons()
+    assert "📘 мой стиль" in session.buttons()
 
-    await feed(msg("разбери BTC, навык тейки"))
+    await feed(msg("разбери BTC, навык мой стиль"))
     assert "Твои навыки применяются в ИИ-выводе" in session.last().text  # без ключа ИИ
 
 
@@ -877,3 +881,142 @@ async def test_screener_in_group_replies(screener_env):
     await feed(msg("@trending_test_bot что растёт", GROUP))
     last = session.last()
     assert last.chat_id == GROUP.id and last.reply_parameters is not None and "Скринер · рост" in last.text
+
+
+# --- теханализ и тейки --------------------------------------------------------------------------
+
+
+def with_candles(svc):
+    from tests.ta_fixtures import ta_http
+
+    candles = ta_http(drift=0.003).routes[0]
+    svc.http.routes.insert(0, candles)  # свечи 4ч и 1д — раньше общей заготовки klines
+
+
+async def test_takes_by_words_in_card(card_env):
+    session, feed, svc = card_env
+    with_candles(svc)
+    await feed(msg("тейки по BTC"))
+    photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+    assert "🎯 <b>Сетап · BTC</b> — 🟢 лонг" in photo.caption
+    assert "Тейк 1:" in photo.caption and "R:R" in photo.caption and "Стоп:" in photo.caption
+    assert (await svc.quota.status(UID)).used == 1
+
+
+async def test_technical_analysis_in_text_report(env):
+    session, feed, svc = env
+    with_candles(svc)
+    await feed(msg("BTC навык теханализ"))
+    text = session.last().text
+    assert "📐 <b>Теханализ · BTC</b>" in text and "RSI 4ч" in text and "Поддержки:" in text
+
+
+async def test_takes_without_candles_explains(env):
+    session, feed, _ = env
+    await feed(msg("разбери BTC #сетап"))  # в общей заготовке свечей нет
+    assert "Свечей пары BTC/USDT на Binance и Bybit нет" in session.last().text
+
+
+# --- скриншот графика ---------------------------------------------------------------------------
+
+
+def photo(caption: str | None = None, chat: Chat = CHAT, *, document: str | None = None) -> Update:
+    kw = {}
+    if document:
+        kw["document"] = Document(file_id="d1", file_unique_id="du1", mime_type=document, file_size=2000)
+    else:
+        kw["photo"] = [
+            PhotoSize(file_id="small", file_unique_id="s", width=90, height=60, file_size=900),
+            PhotoSize(file_id="big", file_unique_id="b", width=1280, height=720, file_size=90_000),
+        ]
+    return Update(
+        update_id=next(_ids),
+        message=Message(message_id=next(_ids), date=datetime.now(), chat=chat, from_user=USER, caption=caption, **kw),
+    )
+
+
+class VisionHub(AIHub):
+    """Модель, которая видит картинки: запоминает, что ей передали."""
+
+    def __init__(self, fail: Exception | None = None):
+        super().__init__({"ANTHROPIC_API_KEY": "k"})
+        self.seen: list[tuple[str, str, list]] = []
+        self.fail = fail
+
+    async def stream(self, ref, system, prompt, **kw):
+        self.seen.append((system, prompt, kw.get("images") or []))
+        if self.fail is not None:
+            raise self.fail
+        for word in "На графике **BTC** 4ч: тренд вверх, уровень **$72K** держится.".split(" "):
+            await asyncio.sleep(0.002)
+            yield word + " "
+
+
+async def test_chart_without_ai_and_without_caption(env):
+    session, feed, svc = env
+    await feed(photo())
+    assert "Скриншоты графиков разбирает ИИ" in session.last().text
+    assert (await svc.quota.status(UID)).used == 0
+
+
+async def test_chart_without_ai_reads_caption_as_question(env):
+    session, feed, svc = env
+    await feed(photo("разбери BTC"))
+    assert "✱ <b>Bitcoin</b>" in session.last().text and (await svc.quota.status(UID)).used == 1
+
+
+async def test_chart_with_vision_model(registry, dispatcher):
+    from tests.ta_fixtures import ta_http
+
+    hub = VisionHub()
+    session, feed, svc = await make_env(registry, dispatcher, hub=hub)
+    svc.http.routes.insert(0, ta_http(drift=0.003).routes[0])
+    try:
+        await feed(photo("BTC 4ч, что думаешь?"))
+        system, prompt, images = hub.seen[0]
+        assert images[0].data == IMAGE and images[0].media_type == "image/jpeg"
+        assert any(isinstance(r, GetFile) and r.file_id == "big" for r in session.requests)  # самое большое фото
+        assert "скриншот графика" in system and "BTC 4ч, что думаешь?" in prompt
+        assert "Сетап · BTC" in prompt and "Тейк 1" in prompt  # свежий теханализ по тикеру из подписи
+        final = session.last()
+        assert final.text.startswith("📷 <b>Разбор графика</b> · BTC\nНа графике <b>BTC</b> 4ч")
+        assert "не финсовет" in final.text and (await svc.quota.status(UID)).used == 1
+    finally:
+        await svc.db.close()
+
+
+async def test_chart_streams_through_draft(registry, dispatcher):
+    hub = VisionHub()
+    session, feed, svc = await make_env(
+        registry, dispatcher, hub=hub, stream_answers=True, stream_drafts=True, draft_interval=0.001
+    )
+    try:
+        await feed(photo())
+        typed = [d.text for d in session.drafts() if not d.text.startswith("✱ <b>Думаю")]
+        assert typed and typed[-1].startswith("📷 <b>Разбор графика</b>")
+        assert session.last().text.startswith("📷 <b>Разбор графика</b>\nНа графике")
+    finally:
+        await svc.db.close()
+
+
+async def test_chart_model_without_vision_explains(registry, dispatcher):
+    from bot.ai import AIError
+
+    session, feed, svc = await make_env(registry, dispatcher, hub=VisionHub(fail=AIError("HTTP 400")))
+    try:
+        await feed(photo())
+        assert (
+            "не смогла прочитать картинку (HTTP 400)" in session.last().text and "VISION_MODEL" in session.last().text
+        )
+        assert (await svc.quota.status(UID)).used == 0  # запас не списан
+    finally:
+        await svc.db.close()
+
+
+async def test_chart_rejects_unknown_image_type(registry, dispatcher):
+    session, feed, svc = await make_env(registry, dispatcher, hub=VisionHub())
+    try:
+        await feed(photo(document="image/tiff"))
+        assert "JPG, PNG, WEBP или GIF" in session.last().text
+    finally:
+        await svc.db.close()

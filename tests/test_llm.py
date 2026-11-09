@@ -326,3 +326,17 @@ async def test_lead_stream_error_midway_returns_none():
 
     llm = LLM(StreamHub(["часть"], error=AIError("нет соединения")), "claude-opus-5-5", "medium", "T")
     assert await llm.verdict("q", {}, [], on_text=on_text) is None
+
+
+def test_images_reach_both_api_formats():
+    from bot.ai.providers import AnthropicProvider, Image, OpenAICompatProvider
+
+    im = Image(b"abc", "image/png")
+    content = AnthropicProvider._params("m", "sys", "вопрос", 100, None, None, [im])["messages"][0]["content"]
+    assert content[0] == {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "YWJj"}}
+    assert content[-1] == {"type": "text", "text": "вопрос"}  # картинка перед текстом
+    assert AnthropicProvider._params("m", "sys", "вопрос", 100, None, None)["messages"][0]["content"] == "вопрос"
+    user = OpenAICompatProvider._user("вопрос", [im])
+    assert user[0] == {"type": "text", "text": "вопрос"}
+    assert user[1] == {"type": "image_url", "image_url": {"url": "data:image/png;base64,YWJj"}}
+    assert OpenAICompatProvider._user("вопрос", []) == "вопрос"

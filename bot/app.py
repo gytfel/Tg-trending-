@@ -50,7 +50,7 @@ async def build_services(settings: Settings) -> Services:
     await db.connect()
     http = Http(timeout=settings.source_timeout, limit=settings.http_concurrency)
     hub = build_hub(settings)
-    llm = LLM(hub, settings.llm_model, settings.llm_effort, settings.bot_name)
+    llm = LLM(hub, settings.llm_model, settings.llm_effort, settings.bot_name, settings.vision_model)
     swarm = Swarm(
         hub,
         default_model=settings.swarm_agent_model,

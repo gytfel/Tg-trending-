@@ -178,10 +178,11 @@ class StubLLM:
 async def test_llm_verdict_is_used_and_escaped(registry):
     reg = small_registry(registry, ["binance", "coingecko"])
     llm = StubLLM()
-    skill = Skill(id=1, user_id=1, name="тейки", content="три тейка", created_at="")
-    res = await Analyzer(btc_http(), reg, llm, deadline=3).analyze(parse_query("BTC навык тейки", ["тейки"]), [skill])
+    skill = Skill(id=1, user_id=1, name="мой стиль", content="свинг без плеча", created_at="")
+    q = parse_query("BTC навык мой стиль", ["мой стиль"])
+    res = await Analyzer(btc_http(), reg, llm, deadline=3).analyze(q, [skill])
     assert res.used_llm
-    assert "🤖 <b>Вывод</b> · навык: тейки" in res.text
+    assert "🤖 <b>Вывод</b> · навык: мой стиль" in res.text
     assert "<b>Импульс</b> сильный &lt;script&gt;" in res.text
     q, ctx, skills = llm.seen
     assert skills == [skill]

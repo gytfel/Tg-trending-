@@ -17,11 +17,12 @@ import html
 import re
 import statistics
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from bot.db import Skill
 from bot.formatting import ago, esc, esc_attr, fmt_big, fmt_pct, fmt_price, html_prefix, plural
+from bot.services import ta as tech
 from bot.services.prose import visible_len
 from bot.services.report import merge_security, rule_verdict, social_line
 from bot.sources.collector import Snapshot
@@ -38,6 +39,7 @@ class SkillInput:
     snaps: list[Snapshot]  # найденные монеты (для обзора рынка — пусто)
     g: Snapshot | None = None  # общий фон рынка
     text: str = ""  # вопрос + тексты своих навыков: оттуда берём депозит, риск, стоп
+    ta: dict[str, tech.TA] = field(default_factory=dict)  # тикер → теханализ (если навыку нужны свечи)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +50,8 @@ class BuiltinSkill:
     prompt: str  # инструкция для ИИ
     render: Callable[[SkillInput], str]
     aliases: tuple[str, ...] = ()
+    needs_ta: bool = False  # нужны свечи: аналитик загрузит их только для таких навыков
+    words: re.Pattern[str] | None = None  # срабатывает и без «навык …»: «тейки по BTC»
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -600,9 +604,66 @@ def render_scam(inp: SkillInput) -> str:
     return "\n\n".join(_scam(s) for s in inp.snaps)
 
 
+# --- 📐 теханализ и 🎯 тейки ---------------------------------------------------------------------
+
+
+def _with_ta(inp: SkillInput, icon: str, name: str, key: str, draw: Callable[[tech.TA, str], str]) -> str:
+    if not inp.snaps:
+        return _need_coin(icon, name, key)
+    blocks = []
+    for s in inp.snaps:
+        a = s.asset
+        sym = (a.symbol or "").upper() if a else ""
+        if a and a.contract:
+            blocks.append(f"{_title(icon, name, s)}\nДля токенов по контракту свечей бирж нет — нужен тикер с биржи.")
+        elif (t := inp.ta.get(sym)) is not None:
+            blocks.append(draw(t, sym))
+        else:
+            blocks.append(
+                f"{_title(icon, name, s)}\nСвечей пары {esc(sym)}/USDT на Binance и Bybit нет "
+                "или истории мало (меньше 50 свечей 4ч)."
+            )
+    return "\n\n".join(blocks)
+
+
+def render_ta(inp: SkillInput) -> str:
+    return _with_ta(inp, "📐", "Теханализ", "теханализ", tech.render_ta)
+
+
+def render_takes(inp: SkillInput) -> str:
+    return _with_ta(inp, "🎯", "Сетап", "тейки", tech.render_setup)
+
+
 # --- реестр ------------------------------------------------------------------------------------
 
 ALL: tuple[BuiltinSkill, ...] = (
+    BuiltinSkill(
+        "тейки",
+        "🎯",
+        "сетап по тренду: вход, стоп за уровнем, три тейка с R:R",
+        "Дай торговый сетап по расчёту бота: сторона, вход, стоп, три тейка и R:R. Объясни, почему вход и стоп "
+        "именно там, и при каком условии сценарий отменяется. Уровни и цифры бери только из расчёта бота.",
+        render_takes,
+        ("сетап", "setup", "тейк"),
+        needs_ta=True,
+        words=re.compile(
+            r"(?i)(?<!\w)(тейк\w*|сетап\w*|setup|точк\w* входа|где входить|куда ставить стоп|take.?profit)(?!\w)"
+        ),
+    ),
+    BuiltinSkill(
+        "теханализ",
+        "📐",
+        "тренд, RSI, MACD, EMA, ATR, уровни поддержки и сопротивления по свечам 4ч и 1д",
+        "Сделай теханализ по расчёту бота: тренд на дневках и 4ч, RSI, MACD, EMA, волатильность, ближайшие уровни. "
+        "Скажи, что важнее всего сейчас и какие уровни решают. Уровни бери только из расчёта бота.",
+        render_ta,
+        ("та", "теха", "ta", "техан"),
+        needs_ta=True,
+        words=re.compile(
+            r"(?i)(?<!\w)(теханализ\w*|тех\.? ?анализ\w*|технический анализ|уровн[иья]|rsi|macd|макд|ema|"
+            r"поддержк[аиу]|сопротивлени[ея])(?!\w)"
+        ),
+    ),
     BuiltinSkill(
         "новости",
         "📰",
@@ -673,11 +734,15 @@ def names(exclude: Iterable[str] = ()) -> list[str]:
     return [n for b in ALL for n in b.names if n.casefold() not in taken]
 
 
-def find(found_names: Iterable[str]) -> list[BuiltinSkill]:
+def find(found_names: Iterable[str], text: str = "") -> list[BuiltinSkill]:
+    """Навыки, названные в вопросе («навык X», «#X») или узнанные по словам («тейки по BTC»)."""
     out: list[BuiltinSkill] = []
     for n in found_names:
         b = get(n)
         if b is not None and b not in out:
+            out.append(b)
+    for b in ALL:
+        if b.words is not None and b not in out and b.words.search(text):
             out.append(b)
     return out
 

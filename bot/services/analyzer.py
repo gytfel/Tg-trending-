@@ -13,7 +13,7 @@ from bot.db import Skill
 from bot.formatting import esc, short_addr
 from bot.query_parser import ParsedQuery
 from bot.render import Card
-from bot.services import cards, prose, report, skills_builtin, swarm
+from bot.services import cards, prose, report, skills_builtin, swarm, ta
 from bot.services.llm import LLM, to_html
 from bot.services.progress import Progress
 from bot.services.swarm import Swarm
@@ -188,7 +188,7 @@ class Analyzer:
 
         targets = q.targets
         # встроенные навыки (новости, перегрев, риск…) бот считает сам — они работают и без ИИ
-        builtins = skills_builtin.find(q.skills)
+        builtins = skills_builtin.find(q.skills, q.raw)
         ai_on = self.llm.enabled or (self.swarm is not None and self.swarm.enabled)
         # «навык новости» без монеты — про рынок в целом
         overview = not targets and (q.market or bool(builtins) or (ai_on and q.words >= 3))
@@ -268,7 +268,8 @@ class Analyzer:
 
         kind = "compare" if compare else ("contract" if assets[0].contract else "asset")
         card = cards.build_card(kind, found, g)
-        blocks = skills_builtin.run(builtins, skills_builtin.SkillInput(kind, found, g, skill_text))
+        tas = await self._ta(found) if any(b.needs_ta for b in builtins) else {}
+        blocks = skills_builtin.run(builtins, skills_builtin.SkillInput(kind, found, g, skill_text, tas))
         sections.extend(blocks.values())
         ai_skills = skills_builtin.for_ai(skills, builtins, blocks)
         verdict, used, agents, ai_html = await self._verdict(
@@ -305,6 +306,20 @@ class Analyzer:
             card=card,
             caption=self._caption(kind, found, g, ai_html, agents, ai_skills, list(blocks.values())),
         )
+
+    async def _ta(self, found: list[Snapshot]) -> dict[str, ta.TA]:
+        """Свечи 4ч и 1д и теханализ — только для навыков, которым это нужно (теханализ, тейки)."""
+        syms = [s.asset.symbol.upper() for s in found if s.asset and s.asset.symbol and not s.asset.contract]
+
+        async def one(sym: str) -> ta.TA | None:
+            try:
+                return await ta.analyze_symbol(self.http, sym)
+            except Exception:  # noqa: BLE001 — без теханализа разбор всё равно нужен
+                log.exception("ta failed for %s", sym)
+                return None
+
+        results = await asyncio.gather(*(one(sym) for sym in syms))
+        return {sym: t for sym, t in zip(syms, results, strict=True) if t is not None}
 
     def _use_swarm(self, q: ParsedQuery, kind: str, skills: list[Skill]) -> bool:
         """Рой — только на сложные вопросы (AI_MODE=auto): простой «разбери BTC» делает один аналитик."""

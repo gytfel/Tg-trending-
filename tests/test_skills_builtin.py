@@ -118,7 +118,8 @@ def test_parse_risk(text, expected):
 def test_names_and_lookup():
     assert sb.get("Перегрев").key == "перегрев" and sb.get("скам").key == "скам-чек"
     assert "новости" not in sb.names(exclude=["Новости"])  # имя занято своим навыком
-    assert [b.key for b in sb.find(["фандинг", "перегрев", "тейки"])] == ["перегрев"]
+    assert [b.key for b in sb.find(["фандинг", "перегрев", "мой стиль"])] == ["перегрев"]
+    assert [b.key for b in sb.find([], "дай тейки и уровни по BTC")] == ["тейки", "теханализ"]  # по словам
 
 
 def test_news_headlines_tone_and_mood():
@@ -259,9 +260,9 @@ def test_caption_fits_telegram_limit():
 def test_for_ai_adds_bot_numbers():
     blocks = {"риск": "⚖️ <b>Риск</b>\nпозиция <b>$800</b>", "новости": "📰 новости"}
     own = Skill(7, 42, "Новости", "Только про ETF", "")
-    tejki = Skill(8, 42, "тейки", "три тейка", "")
+    tejki = Skill(8, 42, "мой стиль", "свинг", "")
     out = sb.for_ai([own, tejki], sb.find(["риск", "новости"]), blocks)
-    assert [s.name for s in out] == ["Новости", "тейки", "риск"]
+    assert [s.name for s in out] == ["Новости", "мой стиль", "риск"]
     assert out[0].content.startswith("Только про ETF") and "📰 новости" in out[0].content  # свой текст + цифры
     assert out[1] is tejki
     assert out[2].content.startswith("Помоги с риск-менеджментом") and "позиция $800" in out[2].content

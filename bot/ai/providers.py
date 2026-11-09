@@ -13,10 +13,11 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -61,6 +62,18 @@ class Refused(AIError):
 
 
 @dataclass(frozen=True, slots=True)
+class Image:
+    """Картинка для модели (скриншот графика). media_type: image/jpeg | image/png | image/webp | image/gif."""
+
+    data: bytes
+    media_type: str = "image/jpeg"
+
+    @property
+    def b64(self) -> str:
+        return base64.b64encode(self.data).decode()
+
+
+@dataclass(frozen=True, slots=True)
 class ModelRef:
     provider: str
     model: str
@@ -97,13 +110,21 @@ class Provider(ABC):
         max_tokens: int,
         effort: str | None = None,
         schema: dict[str, Any] | None = None,
+        images: Sequence[Image] = (),
     ) -> str: ...
 
     async def stream(
-        self, model: str, system: str, prompt: str, *, max_tokens: int, effort: str | None = None
+        self,
+        model: str,
+        system: str,
+        prompt: str,
+        *,
+        max_tokens: int,
+        effort: str | None = None,
+        images: Sequence[Image] = (),
     ) -> AsyncIterator[str]:
         """Текст по кусочкам по мере генерации. По умолчанию — один кусок целиком."""
-        yield await self.complete(model, system, prompt, max_tokens=max_tokens, effort=effort)
+        yield await self.complete(model, system, prompt, max_tokens=max_tokens, effort=effort, images=images)
 
     async def close(self) -> None:  # noqa: B027 — по умолчанию закрывать нечего
         pass
@@ -119,12 +140,18 @@ class AnthropicProvider(Provider):
         await self._client.close()
 
     @staticmethod
-    def _params(model, system, prompt, max_tokens, effort, schema) -> dict[str, Any]:
+    def _params(model, system, prompt, max_tokens, effort, schema, images=()) -> dict[str, Any]:
+        content: Any = prompt
+        if images:  # картинки — перед текстом вопроса
+            content = [
+                {"type": "image", "source": {"type": "base64", "media_type": im.media_type, "data": im.b64}}
+                for im in images
+            ] + [{"type": "text", "text": prompt}]
         params: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
             "system": system,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "user", "content": content}],
         }
         output_config: dict[str, Any] = {}
         if effort:
@@ -153,8 +180,8 @@ class AnthropicProvider(Provider):
         log.warning("Claude %s: нет соединения: %r", model, e)
         return AIError("нет соединения")
 
-    async def complete(self, model, system, prompt, *, max_tokens, effort=None, schema=None) -> str:
-        params = self._params(model, system, prompt, max_tokens, effort, schema)
+    async def complete(self, model, system, prompt, *, max_tokens, effort=None, schema=None, images=()) -> str:
+        params = self._params(model, system, prompt, max_tokens, effort, schema, images)
         try:
             if model in FALLBACK_MODELS:
                 resp = await self._client.beta.messages.create(**params, betas=[FALLBACK_BETA], fallbacks="default")
@@ -169,10 +196,10 @@ class AnthropicProvider(Provider):
             raise AIError("пустой ответ")
         return text
 
-    async def stream(self, model, system, prompt, *, max_tokens, effort=None) -> AsyncIterator[str]:
+    async def stream(self, model, system, prompt, *, max_tokens, effort=None, images=()) -> AsyncIterator[str]:
         """Текст по мере генерации. Отказ на середине подхватывает запасная модель (fallbacks) —
         уже показанный текст при этом не отменяется; если отказалась вся цепочка — Refused."""
-        params = self._params(model, system, prompt, max_tokens, effort, None)
+        params = self._params(model, system, prompt, max_tokens, effort, None, images)
         try:
             if model in FALLBACK_MODELS:
                 manager = self._client.beta.messages.stream(**params, betas=[FALLBACK_BETA], fallbacks="default")
@@ -209,10 +236,21 @@ class OpenAICompatProvider(Provider):
         if self._session and not self._session.closed:
             await self._session.close()
 
-    async def complete(self, model, system, prompt, *, max_tokens, effort=None, schema=None) -> str:
+    @staticmethod
+    def _user(prompt: str, images: Sequence[Image]) -> Any:
+        if not images:
+            return prompt
+        return [{"type": "text", "text": prompt}] + [
+            {"type": "image_url", "image_url": {"url": f"data:{im.media_type};base64,{im.b64}"}} for im in images
+        ]
+
+    async def complete(self, model, system, prompt, *, max_tokens, effort=None, schema=None, images=()) -> str:
         body: dict[str, Any] = {
             "model": model,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": self._user(prompt, images)},
+            ],
             MAX_TOKENS_PARAM.get(self.name, "max_tokens"): max_tokens,
         }
         headers = {"Content-Type": "application/json"}
@@ -241,10 +279,13 @@ class OpenAICompatProvider(Provider):
             raise AIError("пустой ответ")
         return str(content).strip()
 
-    async def stream(self, model, system, prompt, *, max_tokens, effort=None) -> AsyncIterator[str]:
+    async def stream(self, model, system, prompt, *, max_tokens, effort=None, images=()) -> AsyncIterator[str]:
         body: dict[str, Any] = {
             "model": model,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": self._user(prompt, images)},
+            ],
             MAX_TOKENS_PARAM.get(self.name, "max_tokens"): max_tokens,
             "stream": True,
         }
@@ -338,15 +379,27 @@ class AIHub:
         max_tokens: int = 16000,
         effort: str | None = None,
         schema: dict[str, Any] | None = None,
+        images: Sequence[Image] = (),
     ) -> str:
+        kw: dict[str, Any] = {"images": images} if images else {}
         return await self.provider(ref).complete(
-            ref.model, system, prompt, max_tokens=max_tokens, effort=effort, schema=schema
+            ref.model, system, prompt, max_tokens=max_tokens, effort=effort, schema=schema, **kw
         )
 
     async def stream(
-        self, ref: ModelRef, system: str, prompt: str, *, max_tokens: int = 16000, effort: str | None = None
+        self,
+        ref: ModelRef,
+        system: str,
+        prompt: str,
+        *,
+        max_tokens: int = 16000,
+        effort: str | None = None,
+        images: Sequence[Image] = (),
     ) -> AsyncIterator[str]:
-        async for piece in self.provider(ref).stream(ref.model, system, prompt, max_tokens=max_tokens, effort=effort):
+        kw: dict[str, Any] = {"images": images} if images else {}
+        async for piece in self.provider(ref).stream(
+            ref.model, system, prompt, max_tokens=max_tokens, effort=effort, **kw
+        ):
             yield piece
 
     async def close(self) -> None:

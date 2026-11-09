@@ -255,7 +255,7 @@ async def test_analyzer_swarm_without_lead_falls_back_to_rules(registry):
         ("сравни ARB и OP", "compare", False, "сравнение"),
         ("сравни ARB и OP коротко", "compare", False, None),  # «коротко» — без роя
         ("0x6982508145454Ce325dDbE47a25d4ec3d2311933", "contract", False, "проверка токена"),
-        ("разбери SOL навык тейки", "asset", True, "свой навык"),
+        ("разбери SOL навык мой стиль", "asset", True, "свой навык"),
         ("стоит ли покупать ETH", "asset", False, "вопрос о решении"),
         ("BTC лонг или шорт?", "asset", False, "вопрос о решении"),
         (
@@ -276,7 +276,7 @@ async def test_analyzer_swarm_without_lead_falls_back_to_rules(registry):
 def test_swarm_reason(text, kind, custom, reason):
     from bot.services.swarm import swarm_reason
 
-    q = parse_query(text, ["тейки", "риск"])
+    q = parse_query(text, ["мой стиль", "риск"])
     assert swarm_reason(q, kind, custom) == reason
 
 
