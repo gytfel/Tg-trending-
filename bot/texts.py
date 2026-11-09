@@ -111,7 +111,9 @@ def watches_screen(lines: list[str], limit: int) -> str:
     text = (
         "🔔 <b>Слежки</b>\n\n"
         "Напишу, когда цена дойдёт до уровня или монета резко двинется.\n"
-        "<i>Например: BTC &gt; 120000 · ETH &lt; 3000 · SOL ±5%</i>"
+        "<i>Например: BTC &gt; 120000 · ETH &lt; 3000 · SOL ±5%</i>\n\n"
+        "📰 А ещё — о важных новостях по монете и о её листингах, 🆕 или обо всех листингах "
+        "и делистингах Binance и Bybit."
     )
     if lines:
         text += f"\n\n<b>Активные ({len(lines)} из {limit}):</b>\n" + "\n".join(f"• {ln}" for ln in lines)
@@ -151,6 +153,32 @@ def watch_saved(desc: str, price: str) -> str:
 
 def watch_already(desc: str) -> str:
     return f"Условие уже выполнено: {desc}. Поставь другой уровень."
+
+
+NEWS_ASK = "📰 Новости какой монеты присылать? Пришли тикер, например: <b>SOL</b>."
+NEWS_BAD = "Не похоже на тикер. Пришли, например: <b>SOL</b> или <b>$PEPE</b>."
+
+
+def news_saved(symbol: str) -> str:
+    s = esc(symbol)
+    return (
+        f"📰 Готово: пришлю важные новости по <b>{s}</b> и сообщу, если {s} залистят или делистнут "
+        "на Binance или Bybit.\n\n"
+        "<i>Важные — те, что подхватили несколько изданий, или про листинг, взлом, ETF, суды, разлоки, "
+        "обновления сети. Не больше 4 уведомлений в сутки, проверка раз в 5 минут.</i>"
+    )
+
+
+def news_exists(symbol: str) -> str:
+    return f"📰 Уже слежу за новостями {esc(symbol)}."
+
+
+LISTINGS_ON = (
+    "🆕 Включил: пришлю, когда на Binance или Bybit (спот и фьючерсы) появится новая пара "
+    "или монету снимут с торгов. Проверка раз в 5 минут."
+)
+LISTINGS_OFF = "🆕 Уведомления о листингах выключены."
+ALERT_OFF = "🔕 Больше не присылаю"
 
 
 def watch_triggered(desc: str, price: str) -> str:

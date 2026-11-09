@@ -1069,3 +1069,45 @@ async def test_cached_ai_answer_is_still_typed(registry, dispatcher):
         assert len(edits) >= 2 and edits[-1].caption.startswith("BTC держится у <b>$100K</b>")  # но текст «печатается»
     finally:
         await svc.db.close()
+
+
+# --- слежка за новостями и листингами ------------------------------------------------------------
+
+
+async def test_news_watch_from_report_button(env):
+    session, feed, svc = env
+    await feed(msg("разбери BTC"))
+    await feed(cb(session.button_data("📰 Новости BTC")))
+    assert "пришлю важные новости по <b>BTC</b>" in session.last().text
+    assert [(w.symbol, w.kind) for w in await svc.db.list_watches(UID)] == [("BTC", "news")]
+    await feed(cb("wt:news:0:BTC"))  # второй раз — не дублируем
+    assert "Уже слежу за новостями BTC" in session.last().text
+
+
+async def test_news_and_listings_from_watches_screen(env):
+    session, feed, svc = env
+    await feed(cb("nav:watches"))
+    assert "+ 📰 Новости монеты" in session.buttons() and "🆕 Все листинги" in session.buttons()
+    await feed(cb(session.button_data("+ 📰 Новости монеты")))
+    assert "Новости какой монеты" in session.last().text
+    await feed(msg("$sol"))
+    assert "новости по <b>SOL</b>" in session.last().text
+    await feed(cb("nav:watches"))
+    await feed(cb(session.button_data("🆕 Все листинги")))
+    assert "🆕 Листинги: выключить" in session.buttons() and "Все листинги и делистинги" in session.last().text
+    await feed(cb(session.button_data("🆕 Листинги: выключить")))
+    assert "🆕 Все листинги" in session.buttons()
+    kinds = sorted(w.kind for w in await svc.db.list_watches(UID))
+    assert kinds == ["news"]
+
+
+async def test_news_watch_by_words_and_off_from_alert(env):
+    session, feed, svc = env
+    await feed(msg("следи за новостями TON"))
+    assert "новости по <b>TON</b>" in session.last().text
+    await feed(msg("следи за листингами"))
+    assert "Включил" in session.last().text
+    w = await svc.db.find_watch(UID, "TON", "news")
+    await feed(cb(f"wt:off:{w.id}:"))
+    assert (await svc.db.find_watch(UID, "TON", "news")) is None
+    assert any(isinstance(r, AnswerCallbackQuery) and r.text == "🔕 Больше не присылаю" for r in session.requests)

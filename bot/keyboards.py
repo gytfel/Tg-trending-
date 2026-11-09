@@ -116,8 +116,24 @@ def watches(items: list[tuple[Watch, str]]) -> InlineKeyboardMarkup:
     for w, desc in items:
         b.button(text=f"🗑 {desc}", callback_data=WatchCb(action="del", id=w.id))
     b.button(text="+ Новая слежка", callback_data=WatchCb(action="new"), style=PRIMARY)
+    b.button(text="+ 📰 Новости монеты", callback_data=WatchCb(action="news"))
+    listings = any(w.kind == "listings" for w, _ in items)
+    b.button(text="🆕 Листинги: выключить" if listings else "🆕 Все листинги", callback_data=WatchCb(action="listings"))
     b.button(text=BACK, callback_data=Nav(to="menu"))
-    b.adjust(1)
+    b.adjust(*([1] * len(items)), 1, 2, 1)
+    return b.as_markup()
+
+
+def news_alert(symbol: str | None, watch_id: int) -> InlineKeyboardMarkup:
+    """Под уведомлением о новости или листинге."""
+    b = InlineKeyboardBuilder()
+    if symbol:
+        b.button(text=f"✱ Разобрать {symbol}", callback_data=Ask(symbol=symbol), style=PRIMARY)
+        b.button(text="🔕 Не следить", callback_data=WatchCb(action="off", id=watch_id))
+    else:
+        b.button(text="🔕 Отключить листинги", callback_data=WatchCb(action="off", id=watch_id))
+        b.button(text="🔔 Слежки", callback_data=Nav(to="watches"))
+    b.adjust(2)
     return b.as_markup()
 
 
@@ -142,12 +158,13 @@ def report(symbol: str | None, details: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     if symbol:
         b.button(text=f"🔔 Следить за {symbol}", callback_data=WatchCb(action="new", symbol=symbol))
+        b.button(text=f"📰 Новости {symbol}", callback_data=WatchCb(action="news", symbol=symbol))
     b.button(text="🔄 Обновить", callback_data=ReportCb(action="refresh"))
     if details:
         b.button(text="📋 Подробно", callback_data=ReportCb(action="details"))
     b.button(text="📊 Источники", callback_data=ReportCb(action="sources"))
     b.button(text="✱ Меню", callback_data=Nav(to="menu"))
-    b.adjust(*(([1] if symbol else []) + ([2, 2] if details else [2, 1])))
+    b.adjust(*(([2] if symbol else []) + ([2, 2] if details else [2, 1])))
     return b.as_markup()
 
 

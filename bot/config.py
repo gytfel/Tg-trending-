@@ -67,6 +67,7 @@ class Settings(BaseSettings):
 
     # Слежки
     watch_interval: int = 60  # секунд между проверками
+    news_watch_interval: int = 300  # слежка за новостями и листингами — раз в 5 минут
 
     log_level: str = "INFO"
 

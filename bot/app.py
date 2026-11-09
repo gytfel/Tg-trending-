@@ -23,6 +23,7 @@ from bot.services import Services
 from bot.services.analyzer import Analyzer
 from bot.services.health_report import HealthReporter
 from bot.services.llm import LLM
+from bot.services.newswatch import NewsWatcher
 from bot.services.prices import PriceService
 from bot.services.quota import Quota
 from bot.services.swarm import Swarm
@@ -135,6 +136,9 @@ async def main() -> None:
     )
     dp = build_dispatcher(svc)
     watcher = asyncio.create_task(Watcher(bot, svc.db, svc.prices, settings.watch_interval).run())
+    news = asyncio.create_task(
+        NewsWatcher(bot, svc.db, svc.http, svc.prices, interval=settings.news_watch_interval).run()
+    )
     reporter = None
     if settings.health_report and settings.admins and svc.health is not None:
         # раз в сутки — сводка админам: что ломалось, что вернулось, что не работает дольше суток
@@ -146,7 +150,7 @@ async def main() -> None:
             log.warning("не удалось обновить меню команд: %r", e)
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
-        for task in (watcher, reporter):
+        for task in (watcher, news, reporter):
             if task is not None:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

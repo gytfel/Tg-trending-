@@ -19,7 +19,9 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-KINDS = ("above", "below", "up", "down", "move")
+KINDS = ("above", "below", "up", "down", "move")  # слежки за ценой
+NEWS_KINDS = ("news", "listings")  # новости по монете и все листинги — их проверяет NewsWatcher
+ALL_LISTINGS = "*"  # symbol у слежки «все листинги»
 
 _SYM = r"\$?(?P<sym>[A-Za-z][A-Za-z0-9]{1,14})"
 _NUM = r"(?P<num>\d[\d\s.,_]*\s*[kкmм]?)"
@@ -75,6 +77,10 @@ def parse_watch(text: str, default_symbol: str | None = None) -> WatchSpec | Non
 
 def describe(symbol: str, kind: str, target: float, base: float | None = None) -> str:
     sym = esc(symbol)
+    if kind == "news":
+        return f"📰 Новости и листинги {sym}"
+    if kind == "listings":
+        return "🆕 Все листинги и делистинги Binance и Bybit"
     if kind == "above":
         return f"{sym} выше {fmt_price(target)}"
     if kind == "below":
@@ -123,7 +129,7 @@ class Watcher:
             await asyncio.sleep(self.interval)
 
     async def tick(self) -> int:
-        watches = await self.db.active_watches()
+        watches = [w for w in await self.db.active_watches() if w.kind in KINDS]  # новости — у NewsWatcher
         if not watches:
             return 0
         prices = await self.prices.many({w.symbol for w in watches})

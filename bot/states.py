@@ -8,3 +8,4 @@ class SkillForm(StatesGroup):
 
 class WatchForm(StatesGroup):
     condition = State()
+    news_symbol = State()  # тикер для слежки за новостями

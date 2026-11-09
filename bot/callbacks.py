@@ -17,7 +17,7 @@ class SkillCb(CallbackData, prefix="sk"):
 
 
 class WatchCb(CallbackData, prefix="wt"):
-    action: str  # new | del
+    action: str  # new | del | off (из уведомления) | news | listings
     id: int = 0
     symbol: str = ""
 

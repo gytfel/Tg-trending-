@@ -14,7 +14,7 @@ from email.utils import parsedate_to_datetime
 from urllib.parse import quote_plus, urlsplit
 
 from bot.sources.base import Asset, Category, Ctx, NewsItem, NoData, Scope
-from bot.sources.http import HttpError
+from bot.sources.http import Http, HttpError
 from bot.sources.registry import planned, source
 
 ATOM = "{http://www.w3.org/2005/Atom}"
@@ -139,6 +139,27 @@ async def site_news(ctx: Ctx, homepage: str, name: str) -> list[NewsItem]:
     return items
 
 
+async def feed_items(http: Http, name: str, url: str, homepage: str, ttl: float = 600) -> list[NewsItem]:
+    """Вся лента издания (для разбора берём 5 релевантных, для слежки за новостями — всё)."""
+    try:
+        return parse_feed(await http.get_text(url, headers=FEED_HEADERS, ttl=ttl), name)
+    except HttpError as e:
+        if e.status not in BLOCKED:
+            raise
+        return await site_news(Ctx(http=http, asset=None), homepage, name)
+
+
+async def google_coin_news(http: Http, query: str, ttl: float = 600) -> list[NewsItem]:
+    """Google News по монете за сутки; издание берём из хвоста заголовка «… - CoinDesk»."""
+    url = f"https://news.google.com/rss/search?q={quote_plus(query)}+when:1d&hl=en-US&gl=US&ceid=US:en"
+    items = parse_feed(await http.get_text(url, headers=FEED_HEADERS, ttl=ttl), "Google News")
+    for n in items:
+        head, sep, publisher = n.title.rpartition(" - ")
+        if sep and 2 <= len(publisher) <= 40:
+            n.title, n.source = head.strip(), publisher.strip()
+    return items
+
+
 def _make_rss_source(sid: str, name: str, url: str, homepage: str) -> None:
     @source(
         sid,
@@ -149,13 +170,7 @@ def _make_rss_source(sid: str, name: str, url: str, homepage: str) -> None:
         note="закрыт для ботов — заголовки через Google News",
     )
     async def _rss(ctx: Ctx):
-        try:
-            items = parse_feed(await ctx.http.get_text(url, headers=FEED_HEADERS, ttl=600), name)
-        except HttpError as e:
-            if e.status not in BLOCKED:
-                raise
-            items = await site_news(ctx, homepage, name)
-        return relevant(items, ctx.asset)
+        return relevant(await feed_items(ctx.http, name, url, homepage), ctx.asset)
 
 
 for _feed in FEEDS:

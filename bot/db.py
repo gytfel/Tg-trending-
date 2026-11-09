@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS watches (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id         INTEGER NOT NULL,
     symbol          TEXT NOT NULL,
-    kind            TEXT NOT NULL,   -- above | below | up | down | move
+    kind            TEXT NOT NULL,   -- above | below | up | down | move | news | listings
     target          REAL NOT NULL,   -- уровень цены или % для up/down/move
     base_price      REAL,            -- цена при создании (для %)
     created_at      TEXT NOT NULL,
@@ -53,6 +53,14 @@ CREATE TABLE IF NOT EXISTS queries (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_queries_created ON queries (created_at);
+CREATE TABLE IF NOT EXISTS alerts (          -- уже отправленные уведомления о новостях и листингах
+    user_id    INTEGER NOT NULL,
+    key        TEXT NOT NULL,                -- история новости или листинг: второй раз не шлём
+    symbol     TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, key)
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_user ON alerts (user_id, symbol, created_at);
 """
 
 
@@ -257,6 +265,38 @@ class Database:
     async def deactivate_user_watches(self, user_id: int) -> None:
         await self.db.execute("UPDATE watches SET active = 0 WHERE user_id = ?", (user_id,))
         await self.db.commit()
+
+    async def find_watch(self, user_id: int, symbol: str, kind: str) -> Watch | None:
+        async with self.db.execute(
+            f"SELECT {self._WATCH_COLS} FROM watches WHERE user_id = ? AND symbol = ? AND kind = ? AND active = 1",
+            (user_id, symbol, kind),
+        ) as cur:
+            row = await cur.fetchone()
+        return self._watch(row) if row else None
+
+    async def watches_of(self, kinds: tuple[str, ...]) -> list[Watch]:
+        marks = ", ".join("?" * len(kinds))
+        async with self.db.execute(
+            f"SELECT {self._WATCH_COLS} FROM watches WHERE active = 1 AND kind IN ({marks})", kinds
+        ) as cur:
+            return [self._watch(r) for r in await cur.fetchall()]
+
+    # -- уведомления о новостях и листингах ----------------------------------------------
+
+    async def add_alert(self, user_id: int, key: str, symbol: str) -> bool:
+        """Запомнить отправку. False — это уведомление пользователь уже получал."""
+        cur = await self.db.execute(
+            "INSERT OR IGNORE INTO alerts (user_id, key, symbol, created_at) VALUES (?, ?, ?, ?)",
+            (user_id, key, symbol, now_iso()),
+        )
+        await self.db.commit()
+        return cur.rowcount > 0
+
+    async def count_alerts(self, user_id: int, symbol: str, since: str) -> int:
+        async with self.db.execute(
+            "SELECT COUNT(*) FROM alerts WHERE user_id = ? AND symbol = ? AND created_at >= ?", (user_id, symbol, since)
+        ) as cur:
+            return (await cur.fetchone())[0]
 
     async def count_watches(self, user_id: int) -> int:
         async with self.db.execute("SELECT COUNT(*) FROM watches WHERE user_id = ? AND active = 1", (user_id,)) as cur:
