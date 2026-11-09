@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
@@ -40,3 +42,10 @@ async def safe_edit(msg: Message, text: str, kb: InlineKeyboardMarkup | None = N
             return msg
         log.debug("edit failed (%s), sending new message", e)
         return await msg.answer(text, reply_markup=kb)
+
+
+def now_in(tz_name: str) -> datetime:
+    try:
+        return datetime.now(ZoneInfo(tz_name))
+    except (ZoneInfoNotFoundError, ValueError):
+        return datetime.now(UTC)

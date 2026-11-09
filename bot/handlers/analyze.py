@@ -7,8 +7,6 @@ import contextlib
 import logging
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
@@ -22,13 +20,14 @@ from bot import keyboards, texts
 from bot.callbacks import Ask, Nav, ReportCb
 from bot.formatting import esc, split_message
 from bot.handlers import streaming
-from bot.handlers.common import safe_edit, show
+from bot.handlers.common import now_in, safe_edit, show
 from bot.handlers.draft import Draft, DraftUnavailable, drafts_available
 from bot.handlers.live import LiveAnswer, send_card
+from bot.handlers.screener import send_screen
 from bot.handlers.thinking import ThinkingMessage
 from bot.query_parser import parse_query
 from bot.render import Brand, render
-from bot.services import Services, report, skills_builtin
+from bot.services import Services, report, screener, skills_builtin
 from bot.services.prose import CAPTION_LIMIT, visible_len
 
 log = logging.getLogger(__name__)
@@ -156,6 +155,13 @@ async def _send(msg: Message, text: str, kb: InlineKeyboardMarkup | None, edit: 
 async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services, *, reply: bool = False) -> None:
     """reply=True — в группах отвечаем на сообщение пользователя, чтобы было видно, кому ответ."""
     respond = chat_msg.reply if reply else chat_msg.answer
+    skills = await svc.db.list_skills(user_id)
+    own = [s.name for s in skills]
+    parsed = parse_query(text, own + skills_builtin.names(exclude=own))  # свои + встроенные навыки
+    if parsed.is_empty and not parsed.skills and (screen := screener.detect(text)):
+        # «где самый высокий фандинг», «что растёт» — списком по рынку, запас не тратим
+        await send_screen(chat_msg, screen, svc, reply=reply)
+        return
     if user_id in svc.busy:
         await respond(texts.BUSY)
         return
@@ -164,9 +170,6 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
         await respond(texts.quota_empty(quota.limit), reply_markup=keyboards.back())
         return
 
-    skills = await svc.db.list_skills(user_id)
-    own = [s.name for s in skills]
-    parsed = parse_query(text, own + skills_builtin.names(exclude=own))  # свои + встроенные навыки
     used_skills = [s for s in skills if s.name in parsed.skills]
 
     svc.busy.add(user_id)
@@ -406,10 +409,3 @@ async def _send_card_draft(
 async def _brand(chat_msg: Message, svc: Services) -> Brand:
     me = await chat_msg.bot.me()
     return Brand(svc.settings.bot_name, me.username, now_in(svc.settings.timezone))
-
-
-def now_in(tz_name: str) -> datetime:
-    try:
-        return datetime.now(ZoneInfo(tz_name))
-    except (ZoneInfoNotFoundError, ValueError):
-        return datetime.now(UTC)

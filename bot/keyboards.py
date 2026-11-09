@@ -5,7 +5,7 @@ from __future__ import annotations
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.callbacks import CANCEL, Ask, Nav, ReportCb, SkillCb, WatchCb
+from bot.callbacks import CANCEL, Ask, Nav, ReportCb, ScreenCb, SkillCb, WatchCb
 from bot.db import Skill, Watch
 
 PRIMARY = "primary"
@@ -49,9 +49,25 @@ def analyze(trending: list[tuple[str, bool]]) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for symbol, hot in trending:
         b.button(text=f"{'🔥' if hot else '⭐'} {symbol}", callback_data=Ask(symbol=symbol))
+    b.button(text="📊 Скринер рынка", callback_data=ScreenCb(screen="menu"))
     b.button(text=BACK, callback_data=Nav(to="menu"))
-    rows = [2] * (len(trending) // 2) + ([1] if len(trending) % 2 else []) + [1]
+    rows = [2] * (len(trending) // 2) + ([1] if len(trending) % 2 else []) + [1, 1]
     b.adjust(*rows)
+    return b.as_markup()
+
+
+def screener(current: str | None = None) -> InlineKeyboardMarkup:
+    """Переключение экранов скринера; текущий — синим, плюс «обновить»."""
+    from bot.services.screener import SCREENS
+
+    b = InlineKeyboardBuilder()
+    for s in SCREENS.values():
+        kw = {"style": PRIMARY} if s.key == current else {}
+        b.button(text=f"{s.icon} {s.button}", callback_data=ScreenCb(screen=s.key), **kw)
+    if current in SCREENS:
+        b.button(text="🔄 Обновить", callback_data=ScreenCb(screen=current))
+    b.button(text="✱ Меню", callback_data=Nav(to="menu"))
+    b.adjust(3, 2, 2 if current in SCREENS else 1)
     return b.as_markup()
 
 

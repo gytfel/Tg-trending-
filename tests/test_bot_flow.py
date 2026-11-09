@@ -270,7 +270,7 @@ async def test_analyze_screen_and_trending_button(env):
     req = session.last()
     assert isinstance(req, EditMessageText)
     assert "Разбор монеты" in req.text and "чаще всего спрашивают за 12 ч" in req.text
-    assert session.buttons() == ["⭐ BTC", "⭐ ETH", "⭐ SOL", "⭐ TON", "← Назад"]
+    assert session.buttons() == ["⭐ BTC", "⭐ ETH", "⭐ SOL", "⭐ TON", "📊 Скринер рынка", "← Назад"]
 
     await feed(cb(session.button_data("⭐ BTC")))
     report = session.last().text
@@ -831,3 +831,49 @@ async def test_builtin_skill_without_coin_is_about_market(card_env):
     await feed(msg("навык коротко"))
     photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
     assert "⚡ <b>Коротко · рынок</b>" in photo.caption
+
+
+# --- скринер рынка -----------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def screener_env(registry, dispatcher):
+    from tests.screener_fixtures import screener_http
+
+    session, feed, svc = await make_env(registry, dispatcher, report_style="text")
+    svc.http = screener_http()
+    yield session, feed, svc
+    await svc.db.close()
+
+
+async def test_screener_by_words_does_not_spend_quota(screener_env):
+    session, feed, svc = screener_env
+    await feed(msg("где самый высокий фандинг"))
+    last = session.last()
+    assert "🔥 <b>Скринер · фандинг</b>" in last.text and "XYZ" in last.text
+    assert "🔄 Обновить" in session.buttons() and "🚀 Рост" in session.buttons()
+    assert (await svc.quota.status(UID)).used == 0  # скринер бесплатный
+    await feed(cb(session.button_data("🚀 Рост")))
+    assert isinstance(session.last(), EditMessageText) and "🚀 <b>Скринер · рост</b>" in session.last().text
+
+
+async def test_screener_command_and_entry_button(screener_env):
+    session, feed, _ = screener_env
+    await feed(msg("/screener"))
+    assert "📊 <b>Скринер рынка</b>" in session.last().text
+    await feed(cb("nav:analyze"))
+    await feed(cb(session.button_data("📊 Скринер рынка")))
+    assert "📊 <b>Скринер рынка</b>" in session.last().text
+
+
+async def test_coin_question_is_still_analysis(screener_env):
+    session, feed, svc = screener_env
+    await feed(msg("фандинг BTC"))  # монета названа — это разбор, а не скринер
+    assert "Скринер" not in session.last().text and (await svc.quota.status(UID)).used == 1
+
+
+async def test_screener_in_group_replies(screener_env):
+    session, feed, _ = screener_env
+    await feed(msg("@trending_test_bot что растёт", GROUP))
+    last = session.last()
+    assert last.chat_id == GROUP.id and last.reply_parameters is not None and "Скринер · рост" in last.text

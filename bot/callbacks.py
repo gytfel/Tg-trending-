@@ -22,6 +22,10 @@ class WatchCb(CallbackData, prefix="wt"):
     symbol: str = ""
 
 
+class ScreenCb(CallbackData, prefix="scr"):
+    screen: str  # menu | funding | gainers | losers | volume | listings
+
+
 class ReportCb(CallbackData, prefix="rp"):
     action: str  # refresh | sources | details
 
