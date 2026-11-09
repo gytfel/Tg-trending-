@@ -1020,3 +1020,34 @@ async def test_chart_rejects_unknown_image_type(registry, dispatcher):
         assert "JPG, PNG, WEBP или GIF" in session.last().text
     finally:
         await svc.db.close()
+
+
+# --- медкарта источников ------------------------------------------------------------------------
+
+
+async def test_health_command_for_admin_only(registry, dispatcher):
+    from bot.sources.health import Health
+
+    session, feed, svc = await make_env(registry, dispatcher, report_style="text", admin_ids=str(UID))
+    try:
+        svc.health = Health()
+        svc.health.record([("binance", "HTTP 403")] * 2)
+        await feed(msg("/health"))
+        assert "🩺 <b>Источники</b>" in session.last().text and "Binance" in session.last().text
+        before = len(session.texts())
+        await feed(msg("/health", user=OTHER, chat=Chat(id=OTHER.id, type="private")))
+        assert len(session.texts()) == before  # не админ — молчим
+    finally:
+        await svc.db.close()
+
+
+async def test_paused_source_is_skipped_and_shown(env):
+    from bot.sources.health import Health
+
+    session, feed, svc = env
+    svc.health = svc.analyzer.health = Health()
+    svc.health.record([("binance", "HTTP 403")] * 2)
+    await feed(msg("разбери BTC"))
+    assert not any("api.binance.com/api/v3/ticker" in c[1] for c in svc.http.calls)  # на паузе — не спрашивали
+    await feed(cb("rp:sources", message_id=max(svc.reports)[1]))
+    assert "⏸ На паузе после ошибок, не опрашивались: binance (HTTP 403" in session.last().text

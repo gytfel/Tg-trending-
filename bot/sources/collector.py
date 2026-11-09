@@ -28,6 +28,7 @@ from bot.sources.base import (
     Series,
     SourceResult,
 )
+from bot.sources.health import Health
 from bot.sources.http import Http, HttpError
 
 log = logging.getLogger(__name__)
@@ -68,6 +69,7 @@ class Snapshot:
     results: list[SourceResult] = field(default_factory=list)
     failed: dict[str, str] = field(default_factory=dict)  # id -> причина
     empty: list[str] = field(default_factory=list)  # ответили, но данных нет
+    paused: dict[str, str] = field(default_factory=dict)  # на паузе после серии ошибок: id -> причина
     asked: int = 0
     elapsed: float = 0.0
 
@@ -262,9 +264,18 @@ async def collect(
     per_source_timeout: float = 8.0,
     deadline: float = 14.0,
     on_done: Callable[[DataSource], None] | None = None,
+    health: Health | None = None,
 ) -> Snapshot:
-    """on_done(источник) вызывается после каждого ответившего (или упавшего) источника — для «Думаю…»."""
-    snap = Snapshot(asset=asset, asked=len(sources))
+    """on_done(источник) вызывается после каждого ответившего (или упавшего) источника — для «Думаю…».
+
+    health — «медкарта»: источники на паузе не опрашиваем, итоги сбора записываем.
+    """
+    paused: dict[str, str] = {}
+    if health is not None:
+        ask, paused = health.filter(s.id for s in sources)
+        keep = set(ask)
+        sources = [s for s in sources if s.id in keep]
+    snap = Snapshot(asset=asset, asked=len(sources), paused=paused)
     if not sources:
         return snap
     t0 = time.monotonic()
@@ -273,17 +284,22 @@ async def collect(
         for task, src in tasks.items():
             task.add_done_callback(lambda t, src=src: t.cancelled() or on_done(src))
     done, pending = await asyncio.wait(tasks.keys(), timeout=deadline)
+    outcomes: list[tuple[str, str | None]] = []
     for task in pending:
         task.cancel()
         snap.failed[tasks[task].id] = "deadline"
+        outcomes.append((tasks[task].id, "deadline"))
     for task in done:
         src, res, err = task.result()
+        outcomes.append((src.id, err or None))
         if err:
             snap.failed[src.id] = err
         elif res is None:
             snap.empty.append(src.id)
         else:
             snap.results.append(res)
+    if health is not None:
+        health.record(outcomes)
     # стабильный порядок: как в реестре
     order = {s.id: i for i, s in enumerate(sources)}
     snap.results.sort(key=lambda r: order.get(r.source_id, 0))

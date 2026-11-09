@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from bot.services.quota import Quota
     from bot.services.swarm import Swarm
     from bot.services.trending import Trending
+    from bot.sources.health import Health
     from bot.sources.http import Http
     from bot.sources.registry import Registry
 
@@ -39,6 +40,7 @@ class Services:
     trending: Trending
     swarm: Swarm | None = None
     hub: AIHub | None = None
+    health: Health | None = None  # «медкарта» источников
     busy: set[int] = field(default_factory=set)  # пользователи, у которых идёт разбор
     last: OrderedDict[int, LastQuery] = field(default_factory=OrderedDict)
     # отчёт -> запрос: кнопки «Обновить» и «Источники» относятся к своему отчёту, а не к нажавшему

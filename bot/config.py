@@ -56,6 +56,10 @@ class Settings(BaseSettings):
 
     # Источники
     source_timeout: float = 8.0  # на один источник
+    source_fail_limit: int = 5  # ошибок подряд — и источник уходит на паузу (401/403 — после 2)
+    source_pause_minutes: float = 30  # первая пауза; каждая следующая подряд — вдвое длиннее
+    source_pause_max_hours: float = 6  # дольше не ставим
+    health_report: bool = True  # раз в сутки присылать админам сводку о сломанных источниках
     collect_deadline: float = 15.0  # на весь сбор
     http_concurrency: int = 64
     disabled_sources: str = ""  # id через запятую

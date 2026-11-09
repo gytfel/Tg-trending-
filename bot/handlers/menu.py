@@ -13,7 +13,7 @@ from bot.callbacks import CANCEL, Nav
 from bot.formatting import esc
 from bot.handlers import skills, watches
 from bot.handlers.common import show
-from bot.services import Services
+from bot.services import Services, health_report
 from bot.sources.base import Category
 
 router = Router(name="menu")
@@ -123,9 +123,20 @@ async def sources_screen(event: Message | CallbackQuery, svc: Services) -> None:
 async def admin_stats(message: Message, svc: Services) -> None:
     if message.from_user.id not in svc.settings.admins:
         return
+    paused = len(svc.health.paused()) if svc.health else 0
     st = svc.registry.stats()
     await message.answer(
         f"👥 Пользователей: {await svc.db.count_users()}\n"
-        f"🔌 Источников активно: {st['active']} из {st['total']}\n"
+        f"🔌 Источников активно: {st['active']} из {st['total']}"
+        + (f" · ⏸ на паузе {paused} (/health)" if paused else "")
+        + "\n"
         f"🤖 ИИ: {esc(svc.ai_status())}"
     )
+
+
+@router.message(Command("health"))
+async def admin_health(message: Message, svc: Services) -> None:
+    """🩺 Здоровье источников — только для админов."""
+    if message.from_user.id not in svc.settings.admins or svc.health is None:
+        return
+    await message.answer(health_report.render(svc.health, svc.registry, svc.settings.timezone))

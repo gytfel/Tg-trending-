@@ -461,4 +461,8 @@ def sources_breakdown(snaps: list[Snapshot], g: Snapshot | None) -> str:
             failed = ", ".join(f"{esc(k)} ({esc(v)})" for k, v in list(s.failed.items())[:10])
             more = f" и ещё {len(s.failed) - 10}" if len(s.failed) > 10 else ""
             lines.append(f"⚠️ Не ответили: {failed}{more}")
+        if s.paused:
+            paused = ", ".join(f"{esc(k)} ({esc(v)})" for k, v in list(s.paused.items())[:10])
+            more = f" и ещё {len(s.paused) - 10}" if len(s.paused) > 10 else ""
+            lines.append(f"⏸ На паузе после ошибок, не опрашивались: {paused}{more}")
     return "\n".join(lines)

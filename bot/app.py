@@ -21,12 +21,14 @@ from bot.handlers import build_router
 from bot.middlewares import UserMiddleware
 from bot.services import Services
 from bot.services.analyzer import Analyzer
+from bot.services.health_report import HealthReporter
 from bot.services.llm import LLM
 from bot.services.prices import PriceService
 from bot.services.quota import Quota
 from bot.services.swarm import Swarm
 from bot.services.trending import Trending
 from bot.services.watches import Watcher
+from bot.sources.health import Health
 from bot.sources.http import Http
 from bot.sources.registry import load_providers
 
@@ -61,6 +63,11 @@ async def build_services(settings: Settings) -> Services:
         bot_name=settings.bot_name,
         mode=settings.ai_mode,  # auto — рой на сложные вопросы, always — всегда, single — без роя
     )
+    health = Health(
+        fail_limit=settings.source_fail_limit,
+        pause=settings.source_pause_minutes * 60,
+        max_pause=settings.source_pause_max_hours * 3600,
+    )
     analyzer = Analyzer(
         http,
         registry,
@@ -68,6 +75,7 @@ async def build_services(settings: Settings) -> Services:
         swarm=swarm,
         source_timeout=settings.source_timeout,
         deadline=settings.collect_deadline,
+        health=health,
     )
     return Services(
         settings=settings,
@@ -81,6 +89,7 @@ async def build_services(settings: Settings) -> Services:
         trending=Trending(db, settings.trending_hours),
         swarm=swarm,
         hub=hub,
+        health=health,
     )
 
 
@@ -125,6 +134,10 @@ async def main() -> None:
     )
     dp = build_dispatcher(svc)
     watcher = asyncio.create_task(Watcher(bot, svc.db, svc.prices, settings.watch_interval).run())
+    reporter = None
+    if settings.health_report and settings.admins and svc.health is not None:
+        # раз в сутки — сводка админам: что ломалось, что вернулось, что не работает дольше суток
+        reporter = asyncio.create_task(HealthReporter(bot, svc.health, svc.registry, settings.admins).run())
     try:
         try:
             await bot.set_my_commands(COMMANDS)
@@ -132,9 +145,11 @@ async def main() -> None:
             log.warning("не удалось обновить меню команд: %r", e)
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
-        watcher.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await watcher
+        for task in (watcher, reporter):
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
         await svc.http.close()
         if svc.hub is not None:
             await svc.hub.close()

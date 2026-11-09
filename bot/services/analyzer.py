@@ -19,6 +19,7 @@ from bot.services.progress import Progress
 from bot.services.swarm import Swarm
 from bot.sources.base import Asset, Category
 from bot.sources.collector import Snapshot, collect
+from bot.sources.health import Health
 from bot.sources.http import Http
 from bot.sources.registry import Registry
 from bot.sources.resolver import resolve_contract, resolve_symbol
@@ -130,7 +131,9 @@ class Analyzer:
         swarm: Swarm | None = None,
         source_timeout: float = 8.0,
         deadline: float = 15.0,
+        health: Health | None = None,
     ) -> None:
+        self.health = health  # «медкарта» источников: сломанные на паузе не ждём
         self.http = http
         self.registry = registry
         self.llm = llm
@@ -146,6 +149,7 @@ class Analyzer:
             per_source_timeout=self.source_timeout,
             deadline=self.deadline,
             on_done=on_done,
+            health=self.health,
         )
 
     async def _resolve(self, kind: str, value: str) -> Asset:
