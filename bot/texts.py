@@ -247,6 +247,8 @@ def help_text(
     stats: dict[str, int],
     ai: str,
     rules_url: str = "",
+    *,
+    admin: bool = False,
 ) -> str:
     """quota=None — в группе: личный остаток запаса там не показываем."""
     mention = f"@{esc(bot_username)}" if bot_username else "меня"
@@ -271,7 +273,7 @@ def help_text(
         "<b>Лимиты</b>\n<blockquote>"
         f"{limit} {plural(limit, 'разбор', 'разбора', 'разборов')} в сутки, запас обновляется в 00:00 UTC — {left}.\n"
         "Слежки работают без лимита.</blockquote>",
-        f"<i>Сейчас работает: {ai_line} · /sources — все источники. Не финансовый совет.</i>",
+        f"<i>Сейчас работает: {ai_line}{' · /sources — все источники' if admin else ''}. Не финансовый совет.</i>",
     ]
     if rules_url:
         parts.append(f'<a href="{esc_attr(rules_url)}">Правила использования</a>')
@@ -317,6 +319,7 @@ def not_listed(what: str) -> str:
 
 GROUP_HINT = "Спроси меня так: <code>@{bot} BTC</code> или <code>/ask BTC</code>"
 
+ADMIN_ONLY = "Этот раздел — только для админа бота."
 ERROR = "😵 Что-то пошло не так при разборе. Попробуй ещё раз через минуту — запас не списан."
 
 CHART_NO_AI = (

@@ -174,7 +174,7 @@ def back(to: str = "menu") -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def help_kb(bot_username: str | None = None, support_url: str = "") -> InlineKeyboardMarkup:
+def help_kb(bot_username: str | None = None, support_url: str = "", *, admin: bool = False) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     top = 0
     if bot_username:
@@ -183,7 +183,8 @@ def help_kb(bot_username: str | None = None, support_url: str = "") -> InlineKey
     if support_url:
         b.button(text="💬 Поддержка", url=support_url)
         top += 1
-    b.button(text="🔌 Источники данных", callback_data=Nav(to="sources"))
+    if admin:  # каталог источников — служебный экран, только админу
+        b.button(text="🔌 Источники данных", callback_data=Nav(to="sources"))
     b.button(text=BACK, callback_data=Nav(to="menu"))
-    b.adjust(*([top] if top else []), 1, 1)
+    b.adjust(*([top] if top else []), *([1] if admin else []), 1)
     return b.as_markup()

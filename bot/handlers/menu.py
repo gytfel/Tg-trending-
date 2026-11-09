@@ -97,6 +97,7 @@ async def profile(event: Message | CallbackQuery, svc: Services) -> None:
 @router.callback_query(Nav.filter(F.to == "help"))
 async def help_screen(event: Message | CallbackQuery, bot: Bot, svc: Services) -> None:
     username = (await bot.me()).username
+    admin = is_admin_here(event, svc)
     text = texts.help_text(
         username,
         svc.settings.daily_limit,
@@ -104,13 +105,24 @@ async def help_screen(event: Message | CallbackQuery, bot: Bot, svc: Services) -
         svc.registry.stats(),
         svc.ai_status(),
         svc.settings.rules_url,
+        admin=admin,
     )
-    await show(event, text, keyboards.help_kb(username, svc.settings.support_url))
+    await show(event, text, keyboards.help_kb(username, svc.settings.support_url, admin=admin))
+
+
+def is_admin_here(event: Message | CallbackQuery, svc: Services) -> bool:
+    """Админ и в личке: служебные экраны (источники) не показываем в группах — их увидят все."""
+    return event.from_user.id in svc.settings.admins and not is_group(event)
 
 
 @router.message(Command("sources"))
 @router.callback_query(Nav.filter(F.to == "sources"))
 async def sources_screen(event: Message | CallbackQuery, svc: Services) -> None:
+    """🔌 Каталог источников — только для админа и только в личке."""
+    if not is_admin_here(event, svc):
+        if isinstance(event, CallbackQuery):
+            await event.answer(texts.ADMIN_ONLY, show_alert=True)
+        return
     per_cat: dict[Category, tuple[int, int, int]] = {}
     for cat, items in svc.registry.by_category().items():
         active = sum(1 for s in items if svc.registry.is_active(s))

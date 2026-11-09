@@ -11,7 +11,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand
+from aiogram.types import BotCommand, BotCommandScopeChat
 from dotenv import load_dotenv
 
 from bot.ai import AIHub
@@ -41,8 +41,14 @@ COMMANDS = [
     BotCommand(command="screener", description="Скринер: фандинг, рост, падение, объёмы, листинги"),
     BotCommand(command="help", description="Как пользоваться"),
     BotCommand(command="profile", description="Профиль и запас"),
-    BotCommand(command="sources", description="Источники данных"),
     BotCommand(command="cancel", description="Отменить ввод"),
+]
+# админу в меню команд — ещё служебные
+ADMIN_COMMANDS = [
+    *COMMANDS,
+    BotCommand(command="sources", description="Источники данных (админ)"),
+    BotCommand(command="health", description="Здоровье источников (админ)"),
+    BotCommand(command="stats", description="Статистика (админ)"),
 ]
 
 
@@ -148,6 +154,11 @@ async def main() -> None:
             await bot.set_my_commands(COMMANDS)
         except Exception as e:  # noqa: BLE001 — меню команд не повод падать; polling сам переподключится
             log.warning("не удалось обновить меню команд: %r", e)
+        for admin in settings.admins:
+            try:
+                await bot.set_my_commands(ADMIN_COMMANDS, scope=BotCommandScopeChat(chat_id=admin))
+            except Exception as e:  # noqa: BLE001 — админ мог ещё не запускать бота
+                log.info("меню команд админа %s не обновлено: %r", admin, e)
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         for task in (watcher, news, reporter):

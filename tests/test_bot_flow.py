@@ -381,8 +381,28 @@ async def test_profile_help_sources(env):
     add = session.last().reply_markup.inline_keyboard[0][0]
     assert add.text == "➕ Добавить в чат" and add.url == "https://t.me/trending_test_bot?startgroup=true"
     assert "💬 Поддержка" not in session.buttons()  # SUPPORT_URL не задан
-    await feed(cb("nav:sources"))
-    assert "🔌 <b>Источники данных</b>" in session.last().text
+    assert "🔌 Источники данных" not in session.buttons() and "/sources" not in help_text  # не админ
+
+
+async def test_sources_screen_is_admin_only(registry, dispatcher):
+    session, feed, svc = await make_env(registry, dispatcher, admin_ids=str(UID))
+    try:
+        await feed(cb("nav:help"))
+        assert "🔌 Источники данных" in session.buttons() and "/sources" in session.last().text
+        await feed(cb(session.button_data("🔌 Источники данных")))
+        assert "🔌 <b>Источники данных</b>" in session.last().text
+        await feed(msg("/sources"))
+        assert "🔌 <b>Источники данных</b>" in session.last().text
+
+        before = len(session.texts())
+        await feed(msg("/sources", user=OTHER, chat=Chat(id=OTHER.id, type="private")))  # не админ
+        await feed(cb("nav:sources", Chat(id=OTHER.id, type="private"), user=OTHER))
+        await feed(msg("/sources", GROUP))  # админ, но в группе — экран увидели бы все
+        assert len(session.texts()) == before
+        alerts = [r for r in session.requests if isinstance(r, AnswerCallbackQuery) and r.show_alert]
+        assert alerts and alerts[-1].text == "Этот раздел — только для админа бота."
+    finally:
+        await svc.db.close()
 
 
 async def test_report_sources_and_refresh(env):
