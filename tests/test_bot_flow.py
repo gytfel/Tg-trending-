@@ -405,14 +405,33 @@ async def test_sources_screen_is_admin_only(registry, dispatcher):
         await svc.db.close()
 
 
-async def test_report_sources_and_refresh(env):
-    session, feed, _ = env
+@pytest.fixture
+async def admin_env(registry, dispatcher):
+    session, feed, svc = await make_env(registry, dispatcher, report_style="text", admin_ids=str(UID))
+    yield session, feed, svc
+    await svc.db.close()
+
+
+async def test_report_sources_and_refresh(admin_env):
+    session, feed, _ = admin_env
     await feed(msg("BTC"))
+    assert "📊 Источники" in session.buttons()  # админу в личке — видно
     await feed(cb("rp:sources"))
     assert "📊 <b>Кто ответил</b>" in session.last().text
     n = len(session.texts())
     await feed(cb("rp:refresh"))
     assert len(session.texts()) > n and "Bitcoin" in session.last().text
+
+
+async def test_report_sources_hidden_from_users(env):
+    session, feed, _ = env
+    await feed(msg("BTC"))
+    assert "📊 Источники" not in session.buttons() and "🔄 Обновить" in session.buttons()
+    before = len(session.texts())
+    await feed(cb("rp:sources"))  # старая кнопка из прошлых сообщений
+    assert len(session.texts()) == before
+    alert = [r for r in session.requests if isinstance(r, AnswerCallbackQuery)][-1]
+    assert alert.show_alert and alert.text == "Этот раздел — только для админа бота."
 
 
 def sent_texts(session) -> list[str]:
@@ -1061,10 +1080,10 @@ async def test_health_command_for_admin_only(registry, dispatcher):
         await svc.db.close()
 
 
-async def test_paused_source_is_skipped_and_shown(env):
+async def test_paused_source_is_skipped_and_shown(admin_env):
     from bot.sources.health import Health
 
-    session, feed, svc = env
+    session, feed, svc = admin_env
     svc.health = svc.analyzer.health = Health()
     svc.health.record([("binance", "HTTP 403")] * 2)
     await feed(msg("разбери BTC"))

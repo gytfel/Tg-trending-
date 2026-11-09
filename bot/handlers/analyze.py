@@ -90,6 +90,10 @@ async def report_details(cb: CallbackQuery, svc: Services) -> None:
 
 @router.callback_query(ReportCb.filter(F.action == "sources"))
 async def report_sources(cb: CallbackQuery, svc: Services) -> None:
+    """«📊 Источники» — кто ответил по этому разбору. Только админу в личке."""
+    if cb.from_user.id not in svc.settings.admins or not isinstance(cb.message, Message) or group_chat(cb.message):
+        await cb.answer(texts.ADMIN_ONLY, show_alert=True)
+        return
     last = report_of(cb, svc)
     if last is None or not isinstance(cb.message, Message):
         await cb.answer(texts.NO_LAST, show_alert=True)
@@ -98,6 +102,10 @@ async def report_sources(cb: CallbackQuery, svc: Services) -> None:
     text = report.sources_breakdown(last.result.snapshots, last.result.background)
     for part in split_message(text):
         await cb.message.answer(part)
+
+
+def group_chat(message: Message) -> bool:
+    return message.chat.type != ChatType.PRIVATE
 
 
 def message_text(message: Message) -> str:
@@ -231,6 +239,8 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
     svc.remember(user_id, text, result)
 
     watch_symbol = result.symbols[0] if result.kind == "asset" and result.symbols else None
+    # «📊 Источники» (кто ответил) — служебная кнопка: только админу и только в личке
+    admin = user_id in svc.settings.admins and chat_msg.chat.type == ChatType.PRIVATE
     group = chat_msg.chat.type != ChatType.PRIVATE
     pace = Pace(
         stream=svc.settings.stream_answers and svc.settings.stream_interval > 0,
@@ -244,12 +254,16 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
         if live is not None and live.started:
             # ответ ИИ уже идёт в чат — дописываем целиком и вешаем кнопки
             details = live.mode == "caption" or live.draft_card
-            sent = await live.finish(result.caption, result.text, keyboards.report(watch_symbol, details=details))
+            sent = await live.finish(
+                result.caption, result.text, keyboards.report(watch_symbol, details=details, sources=admin)
+            )
         elif svc.settings.report_style.strip().lower() == "card" and result.card is not None:
-            kb = keyboards.report(watch_symbol, details=True)
+            kb = keyboards.report(watch_symbol, details=True, sources=admin)
             sent = await _send_card(chat_msg, progress, result, kb, svc, reply, pace)
         if sent is None:  # текстовый отчёт: по настройке или если картинка не получилась
-            sent = await _send_text(chat_msg, progress, result.text, keyboards.report(watch_symbol), pace)
+            sent = await _send_text(
+                chat_msg, progress, result.text, keyboards.report(watch_symbol, sources=admin), pace
+            )
     svc.remember_report(sent.chat.id, sent.message_id, text, result)
 
 
