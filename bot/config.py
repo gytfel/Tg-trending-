@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     # Слежки
     watch_interval: int = 60  # секунд между проверками
     news_watch_interval: int = 300  # слежка за новостями и листингами — раз в 5 минут
+    dex_watch_interval: int = 180  # «присылать новые токены на DEX» — скан раз в 3 минуты
 
     log_level: str = "INFO"
 

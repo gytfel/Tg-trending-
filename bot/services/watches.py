@@ -81,6 +81,9 @@ def describe(symbol: str, kind: str, target: float, base: float | None = None) -
         return f"📰 Новости и листинги {sym}"
     if kind == "listings":
         return "🆕 Все листинги и делистинги Binance и Bybit"
+    if kind == "dex":
+        where = "все сети" if symbol == "*" else esc(symbol.capitalize())
+        return f"🧪 Новые токены на DEX ({where}), прошедшие скам-чек"
     if kind == "above":
         return f"{sym} выше {fmt_price(target)}"
     if kind == "below":

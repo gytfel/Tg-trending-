@@ -947,6 +947,64 @@ async def test_screener_in_group_replies(screener_env):
     assert last.chat_id == GROUP.id and last.reply_parameters is not None and "Скринер · рост" in last.text
 
 
+# --- новые токены на DEX ------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def dex_env(registry, dispatcher):
+    from tests.dex_fixtures import dex_http
+
+    session, feed, svc = await make_env(registry, dispatcher, report_style="text")
+    svc.http = dex_http()
+    for sid in ("goplus", "honeypot_is", "rugcheck"):
+        svc.registry.add(registry.get(sid))
+    yield session, feed, svc
+    await svc.db.close()
+
+
+async def test_new_tokens_by_words_and_subscribe(dex_env):
+    from tests.dex_fixtures import GOOD
+
+    session, feed, svc = dex_env
+    await feed(msg("новые токены на солане"))  # «солане» — сеть, а не разбор SOL
+    last = session.last()
+    assert "🧪 <b>Новые токены на DEX</b> · Solana" in last.text and "<b>GOOD</b>" in last.text
+    assert "RUG — " in last.text and "GeckoTerminal · GoPlus" in last.text
+    assert (await svc.quota.status(UID)).used == 0  # скринер бесплатный
+    buttons = session.buttons()
+    assert "✱ GOOD" in buttons and "✱ RUG" not in buttons and "🔔 Присылать новые 🟢" in buttons
+    assert session.button_data("✱ GOOD") == f"ask:{GOOD}"
+    await feed(cb(session.button_data("🔔 Присылать новые 🟢")))
+    assert await svc.db.find_watch(UID, "solana", "dex") is not None
+    await feed(cb("wt:dex:0:solana"))  # второе нажатие — выключить
+    assert await svc.db.find_watch(UID, "solana", "dex") is None
+
+
+async def test_new_tokens_screen_buttons(dex_env):
+    session, feed, _ = dex_env
+    await feed(msg("/screener"))
+    await feed(cb(session.button_data("🧪 Новые DEX")))
+    assert isinstance(session.last(), EditMessageText) and "· все сети" in session.last().text
+    await feed(cb(session.button_data("Base")))
+    assert "· Base" in session.last().text and "<b>MID</b>" in session.last().text
+
+
+async def test_new_tokens_in_group_have_no_subscribe_button(dex_env):
+    session, feed, _ = dex_env
+    await feed(msg("@trending_test_bot свежие мемы", GROUP))
+    last = session.last()
+    assert last.chat_id == GROUP.id and "Новые токены на DEX" in last.text
+    assert not any("Присылать" in b for b in session.buttons())
+
+
+async def test_new_token_with_contract_is_analysis(dex_env):
+    from tests.dex_fixtures import HONEY
+
+    session, feed, svc = dex_env
+    await feed(msg(f"новый токен {HONEY} проверь"))  # адрес назван — это разбор, а не скан
+    assert "Новые токены на DEX" not in session.last().text
+
+
 # --- теханализ и тейки --------------------------------------------------------------------------
 
 

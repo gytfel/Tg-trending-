@@ -18,10 +18,10 @@ import re
 import statistics
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
 
 from bot.db import Skill
 from bot.formatting import ago, esc, esc_attr, fmt_big, fmt_pct, fmt_price, html_prefix, plural
+from bot.services import scamcheck
 from bot.services import ta as tech
 from bot.services.prose import visible_len
 from bot.services.report import merge_security, rule_verdict, social_line
@@ -526,26 +526,10 @@ def render_short(inp: SkillInput) -> str:
 
 # --- 🛡 скам-чек ------------------------------------------------------------------------------------
 
-_CRIT = re.compile(
-    r"(?i)honeypot|нельзя продать|продать нельзя|менять балансы|балансы можно менять|скрытый владелец|"
-    r"заморозить|нельзя переводить"
-)
-_SELL_TAX = re.compile(r"налог на продажу (\d+)%")
-
-
-def severity(flag: str) -> int:
-    """2 — критично, 1 — настораживает."""
-    if flag.startswith("🔴") or _CRIT.search(flag):
-        return 2
-    if (m := _SELL_TAX.search(flag)) and int(m.group(1)) >= 30:
-        return 2
-    return 1
-
 
 def _scam(s: Snapshot) -> str:
     head = _title("🛡", "Скам-чек", s)
     sec = s.security()
-    dex = s.dex_pairs()
     if not sec and not (s.asset and s.asset.contract):
         m, qs = s.best_market(), s.quotes()
         if qs or (m and m.market_cap and m.market_cap >= 1e9):
@@ -555,45 +539,16 @@ def _scam(s: Snapshot) -> str:
                 f"{head}\n{_sym(s)} {where}{cap} — риск здесь рыночный, а не скам. "
                 "Для мемкоинов и новых токенов пришли адрес контракта: «0x… навык скам-чек»."
             )
-    risk, flags, holders = merge_security(sec)
-    found = [(severity(f), re.sub(r"^[🔴🟠🟡⚪]\s*", "", f)) for f in flags]
-    liq = sum(p.liquidity_usd or 0 for p in dex)
-    if dex and liq < 50_000:
-        found.append((1, f"ликвидность всего {fmt_big(liq)} — цену легко двигать"))
-    oldest = min((p.created_at for p in dex if p.created_at), default=None)
-    if oldest and datetime.now(UTC) - oldest < timedelta(days=3):
-        found.append((1, f"пулу всего {ago(oldest)} — токен совсем новый"))
-    if (top10 := _num(s.metric("top10_share"))) is not None and top10 >= 50:
-        found.append((1, f"топ-10 кошельков держат {top10:g}%"))
-    best = dex[0] if dex else None
-    if (
-        best
-        and best.buys_24h
-        and best.sells_24h is not None
-        and best.buys_24h >= 50
-        and best.sells_24h * 10 < best.buys_24h
-    ):
-        found.append((2, "продаж почти нет при куче покупок — похоже на honeypot"))
-    found.sort(key=lambda x: -x[0])
+    c = scamcheck.check(s)
     lines = [head]
-    if found:
+    if c.flags:
         lines.append("Флаги, от самых опасных:")
-        lines += [f"{'🔴' if sev == 2 else '🟠'} {esc(text)}" for sev, text in found[:6]]
+        lines += [f"{'🔴' if sev == 2 else '🟠'} {esc(text)}" for sev, text in c.flags[:6]]
     elif sec:
         lines.append("Красных флагов по контракту, ликвидности и держателям не нашлось.")
-    if holders:
-        lines.append(f"Держателей: {holders}.")
-    crit = sum(1 for sev, _ in found if sev == 2)
-    soft = len(found) - crit
-    if risk == "high" or crit:
-        verdict = "🔴 не лезть."
-    elif risk == "medium" or soft >= 2:
-        verdict = "🟠 только на сумму, которую не жалко."
-    elif not sec:
-        verdict = "⚪ данных по контракту мало — проверь руками."
-    else:
-        verdict = "🟢 явных проблем нет."
-    lines.append("Вердикт: " + verdict)
+    if c.holders:
+        lines.append(f"Держателей: {c.holders}.")
+    lines.append("Вердикт: " + c.verdict)
     lines.append("Проверь руками: код контракта на сканере, кто держит топ-кошельки, заблокирована ли ликвидность.")
     return "\n".join(lines)
 

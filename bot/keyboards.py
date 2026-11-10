@@ -67,7 +67,45 @@ def screener(current: str | None = None) -> InlineKeyboardMarkup:
     if current in SCREENS:
         b.button(text="🔄 Обновить", callback_data=ScreenCb(screen=current))
     b.button(text="✱ Меню", callback_data=Nav(to="menu"))
-    b.adjust(3, 2, 2 if current in SCREENS else 1)
+    b.adjust(3, 3, 2 if current in SCREENS else 1)
+    return b.as_markup()
+
+
+def newpools(chain: str | None, tokens: list[tuple[str, str]], *, watching: bool | None) -> InlineKeyboardMarkup:
+    """Экран «🧪 Новые на DEX»: разбор токена, фильтр сети, подписка (только в личке — watching не None)."""
+    from bot.services import dexscan
+
+    b = InlineKeyboardBuilder()
+    for sym, addr in tokens:
+        b.button(text=f"✱ {sym[:14]}", callback_data=Ask(symbol=addr))
+    for net in (None, *dexscan.NETS):
+        kw = {"style": PRIMARY} if net == chain else {}
+        label = dexscan.chain_label(net) if net else "Все сети"
+        b.button(text=label, callback_data=ScreenCb(screen=dexscan.screen_key(net)), **kw)
+    if watching is not None:
+        b.button(
+            text=dex_watch_label(watching),
+            callback_data=WatchCb(action="dex", symbol=chain or dexscan.ALL_CHAINS),
+        )
+    b.button(text="🔄 Обновить", callback_data=ScreenCb(screen=dexscan.screen_key(chain)))
+    b.button(text="📊 Скринер", callback_data=ScreenCb(screen="menu"))
+    n = len(tokens)
+    b.adjust(*([2] * (n // 2) + ([1] if n % 2 else [])), 3, 2, *([1] if watching is not None else []), 2)
+    return b.as_markup()
+
+
+def dex_watch_label(watching: bool) -> str:
+    return "🔕 Не присылать новые" if watching else "🔔 Присылать новые 🟢"
+
+
+def dex_alert(token: tuple[str, str] | None, watch_id: int) -> InlineKeyboardMarkup:
+    """Под уведомлением о новом токене."""
+    b = InlineKeyboardBuilder()
+    if token:
+        b.button(text=f"✱ Разобрать {token[0][:14]}", callback_data=Ask(symbol=token[1]), style=PRIMARY)
+    b.button(text="🧪 Все новые", callback_data=ScreenCb(screen="newpools"))
+    b.button(text="🔕 Не присылать", callback_data=WatchCb(action="off", id=watch_id))
+    b.adjust(*([1] if token else []), 2)
     return b.as_markup()
 
 

@@ -21,6 +21,7 @@ from bot.handlers import build_router
 from bot.middlewares import UserMiddleware
 from bot.services import Services
 from bot.services.analyzer import Analyzer
+from bot.services.dexscan import DexWatcher
 from bot.services.health_report import HealthReporter
 from bot.services.llm import LLM
 from bot.services.newswatch import NewsWatcher
@@ -146,6 +147,9 @@ async def main() -> None:
     news = asyncio.create_task(
         NewsWatcher(bot, svc.db, svc.http, svc.prices, interval=settings.news_watch_interval).run()
     )
+    dex = asyncio.create_task(
+        DexWatcher(bot, svc.db, svc.http, svc.registry, svc.health, interval=settings.dex_watch_interval).run()
+    )
     reporter = None
     if settings.health_report and settings.admins and svc.health is not None:
         # раз в сутки — сводка админам: что ломалось, что вернулось, что не работает дольше суток
@@ -162,7 +166,7 @@ async def main() -> None:
                 log.info("меню команд админа %s не обновлено: %r", admin, e)
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
-        for task in (watcher, news, reporter):
+        for task in (watcher, news, dex, reporter):
             if task is not None:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

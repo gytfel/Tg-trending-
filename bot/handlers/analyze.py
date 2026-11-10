@@ -27,7 +27,7 @@ from bot.handlers.screener import send_screen
 from bot.handlers.thinking import ThinkingMessage
 from bot.query_parser import parse_query
 from bot.render import Brand, render
-from bot.services import Services, report, screener, skills_builtin
+from bot.services import Services, dexscan, report, screener, skills_builtin
 from bot.services.prose import CAPTION_LIMIT, visible_len
 
 log = logging.getLogger(__name__)
@@ -166,9 +166,18 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
     skills = await svc.db.list_skills(user_id)
     own = [s.name for s in skills]
     parsed = parse_query(text, own + skills_builtin.names(exclude=own))  # свои + встроенные навыки
+    if (
+        not parsed.skills
+        and not parsed.contracts
+        and set(parsed.symbols) <= dexscan.CHAIN_COINS  # «на солане» парсер считает монетой SOL
+        and (screen := dexscan.detect(text))
+    ):
+        # «новые токены на солане» — свежие пулы DEX со скам-чеком, запас не тратим
+        await send_screen(chat_msg, screen, svc, reply=reply, user_id=user_id)
+        return
     if parsed.is_empty and not parsed.skills and (screen := screener.detect(text)):
         # «где самый высокий фандинг», «что растёт» — списком по рынку, запас не тратим
-        await send_screen(chat_msg, screen, svc, reply=reply)
+        await send_screen(chat_msg, screen, svc, reply=reply, user_id=user_id)
         return
     if user_id in svc.busy:
         await respond(texts.BUSY)

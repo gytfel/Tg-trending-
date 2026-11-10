@@ -17,13 +17,13 @@ class SkillCb(CallbackData, prefix="sk"):
 
 
 class WatchCb(CallbackData, prefix="wt"):
-    action: str  # new | del | off (из уведомления) | news | listings
+    action: str  # new | del | off (из уведомления) | news | listings | dex (новые токены на DEX)
     id: int = 0
     symbol: str = ""
 
 
 class ScreenCb(CallbackData, prefix="scr"):
-    screen: str  # menu | funding | gainers | losers | volume | listings
+    screen: str  # menu | funding | gainers | losers | volume | listings | newpools[-сеть]
 
 
 class ReportCb(CallbackData, prefix="rp"):

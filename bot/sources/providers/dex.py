@@ -75,10 +75,23 @@ async def dexscreener(ctx: Ctx):
     return [_ds_pair(p) for p in pairs[:5]]
 
 
-def _gt_pool(pool: dict) -> DexPair:
+# длинные первыми: «polygon_pos» раньше, чем гипотетический «polygon»
+_GT_NETS = sorted(GT_TO_CHAIN, key=len, reverse=True)
+
+
+def gt_split(gid: str) -> tuple[str, str]:
+    """id GeckoTerminal «сеть_адрес» → (сеть, адрес). В id сети бывает «_» (polygon_pos), в адресе TON — тоже."""
+    for net in _GT_NETS:
+        if gid.startswith(net + "_"):
+            return net, gid[len(net) + 1 :]
+    net, _, addr = gid.partition("_")
+    return net, addr
+
+
+def gt_pool(pool: dict) -> DexPair:
     at = pool.get("attributes") or {}
     rel = pool.get("relationships") or {}
-    net = str(pool.get("id", "")).split("_", 1)[0]
+    net = gt_split(str(pool.get("id", "")))[0]
     base_id = str(((rel.get("base_token") or {}).get("data") or {}).get("id", ""))
     tx = ((at.get("transactions") or {}).get("h24")) or {}
     created = at.get("pool_created_at")
@@ -87,7 +100,7 @@ def _gt_pool(pool: dict) -> DexPair:
         dex=str(((rel.get("dex") or {}).get("data") or {}).get("id", "")),
         pair_address=at.get("address", ""),
         base_symbol=str(at.get("name", "")).split(" / ")[0],
-        base_address=base_id.split("_", 1)[1] if "_" in base_id else None,
+        base_address=gt_split(base_id)[1] or None,
         price_usd=num(at.get("base_token_price_usd")),
         liquidity_usd=num(at.get("reserve_in_usd")),
         volume_24h=num((at.get("volume_usd") or {}).get("h24")),
@@ -113,7 +126,7 @@ async def geckoterminal(ctx: Ctx):
             headers=GT_HEADERS,
             ttl=120,
         )
-        pools = [_gt_pool(p) for p in d.get("data") or []]
+        pools = [gt_pool(p) for p in d.get("data") or []]
         pools = [p for p in pools if _same(p.base_address, a.contract)]
     else:
         d = await ctx.http.get_json(
@@ -122,7 +135,7 @@ async def geckoterminal(ctx: Ctx):
             headers=GT_HEADERS,
             ttl=300,
         )
-        pools = [_gt_pool(p) for p in d.get("data") or []]
+        pools = [gt_pool(p) for p in d.get("data") or []]
         pools = [
             p for p in pools if p.base_symbol.upper() == ctx.sym and (p.liquidity_usd or 0) >= MIN_SYMBOL_LIQUIDITY
         ]
