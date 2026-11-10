@@ -1,0 +1,44 @@
+# Тесты и линтер на каждый push и pull request: если что-то сломалось, GitHub покажет ❌
+# у коммита и пришлёт письмо. Сеть не нужна — биржи и Telegram в тестах подменены.
+name: Тесты
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]  # минимальная поддерживаемая и свежая
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Зависимости
+        run: pip install -r requirements.txt "pytest>=8" "pytest-asyncio>=0.24" "ruff==0.17.4"
+
+      - name: Линтер (ruff)
+        run: |
+          ruff check bot tests
+          ruff format --check bot tests
+
+      - name: Тесты (pytest)
+        run: python -m pytest -q

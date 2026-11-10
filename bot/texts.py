@@ -1,0 +1,416 @@
+"""Все тексты бота (Telegram HTML)."""
+
+from __future__ import annotations
+
+from bot.db import Skill, User
+from bot.formatting import esc, esc_attr, plural, progress_bar
+from bot.services.quota import QuotaStatus
+from bot.sources.base import CATEGORY_META, Category
+
+STAR = "✱"
+BRAND = "✾"  # знак бренда перед названием бота — ближайший к логотипу (шесть лепестков-лент)
+SKILL_NAME_MAX = 40
+SKILL_BODY_MAX = 2000
+
+
+def brand(icon: str = BRAND, emoji_id: str = "", emoji_alt: str = "") -> str:
+    """Знак перед названием: свой эмодзи из пака (если задан BRAND_EMOJI_ID) или символ BRAND_ICON."""
+    if emoji_id.isdigit():
+        return f'<tg-emoji emoji-id="{emoji_id}">{esc(emoji_alt or "✨")}</tg-emoji>'
+    return esc(icon)
+
+
+def main_menu(bot_name: str, quota: QuotaStatus, watches: int, icon: str = BRAND) -> str:
+    """icon — уже готовый HTML знака (см. brand)."""
+    if watches:
+        w = f"{watches} {plural(watches, 'активная', 'активные', 'активных')}"
+    else:
+        w = "пока нет"
+    q = "безлимит" if quota.unlimited else f"{progress_bar(quota.pct)} {quota.pct}%"
+    return (
+        f"{icon} <b>{esc(bot_name)}</b> · ИИ-аналитик\n\n"
+        f"Запас на сегодня {q}\n"
+        f"Слежки — {w}\n\n"
+        "Напиши тикер или вопрос — начну разбор."
+    )
+
+
+def group_menu(bot_name: str, bot_username: str | None, icon: str = BRAND) -> str:
+    """Меню в группе: без личного запаса и слежек — они открываются в личке."""
+    ask = f"<code>@{esc(bot_username)} BTC</code> или " if bot_username else ""
+    return (
+        f"{icon} <b>{esc(bot_name)}</b> · ИИ-аналитик\n\n"
+        f"Спроси меня прямо здесь: {ask}<code>/ask BTC</code>\n"
+        "Навыки, слежки и профиль — в личке, чтобы не светить их в общем чате."
+    )
+
+
+PRIVATE_ONLY = "Это личный раздел — открываю в личке 👇"
+
+
+def analyze_screen(hours: int, has_fallback: bool) -> str:
+    legend = f"<i>🔥 — чаще всего спрашивают за {hours} ч</i>"
+    if has_fallback:
+        legend += "\n<i>⭐ — популярные монеты</i>"
+    return (
+        f"{STAR} <b>Разбор монеты</b>\n\n"
+        "Напиши тикер, адрес контракта или вопрос своими словами.\n"
+        "<i>Например: SOL · $HYPE · сравни ARB и OP</i>\n\n"
+        f"{legend}"
+    )
+
+
+# --- навыки -------------------------------------------------------------------------------
+
+
+def skills_screen(skills: list[Skill], limit: int) -> str:
+    text = (
+        "🧠 <b>Навыки</b>\n\n"
+        "Сохрани свои правила или шаблон один раз — и зови по имени в вопросе.\n"
+        "<i>Например: «разбери BTC, навык тейки»</i>"
+    )
+    if skills:
+        text += f"\n\nТвои навыки: {len(skills)} из {limit}"
+    return text
+
+
+SKILL_ASK_NAME = (
+    "📘 Как назовём навык? Пришли короткое имя (до 40 символов), например: "
+    "<b>тейки</b> или <b>мой стиль</b>. Этим словом ты будешь звать навык в вопросах."
+)
+
+
+def skill_ask_body(name: str) -> str:
+    return (
+        f"✍️ Теперь пришли сам навык «<b>{esc(name)}</b>»: правила, шаблон ответа или чек-лист "
+        f"(до {SKILL_BODY_MAX} символов).\n\n"
+        "<i>Например: «Всегда давай три тейка — консервативный, базовый и агрессивный, "
+        "и стоп под ближайшей поддержкой. В конце — риск/прибыль».</i>"
+    )
+
+
+def skill_saved(name: str) -> str:
+    return f"✅ Навык «<b>{esc(name)}</b>» сохранён.\n\nЗови его так: <i>«разбери BTC, навык {esc(name)}»</i>"
+
+
+def skill_view(skill: Skill) -> str:
+    return (
+        f"📘 <b>{esc(skill.name)}</b>\n\n"
+        f"{esc(skill.content)}\n\n"
+        f"<i>Как вызвать: «разбери BTC, навык {esc(skill.name)}»</i>"
+    )
+
+
+def skill_delete_confirm(skill: Skill) -> str:
+    return f"🗑 Удалить навык «<b>{esc(skill.name)}</b>»?"
+
+
+SKILL_NAME_EMPTY = "Имя не может быть пустым. Пришли короткое слово, например: <b>тейки</b>."
+SKILL_NAME_LONG = f"Слишком длинно — до {SKILL_NAME_MAX} символов. Попробуй короче."
+SKILL_NAME_TAKEN = "Навык с таким именем уже есть. Придумай другое имя."
+SKILL_BODY_LONG = f"Слишком длинно — до {SKILL_BODY_MAX} символов. Сократи и пришли ещё раз."
+SKILL_LIMIT = "Достигнут лимит навыков. Удали ненужный, чтобы добавить новый."
+SEND_TEXT = "Пришли, пожалуйста, текстом."
+
+
+# --- слежки -------------------------------------------------------------------------------
+
+
+def watches_screen(lines: list[str], limit: int) -> str:
+    text = (
+        "🔔 <b>Слежки</b>\n\n"
+        "Напишу, когда цена дойдёт до уровня или монета резко двинется.\n"
+        "<i>Например: BTC &gt; 120000 · ETH &lt; 3000 · SOL ±5%</i>\n\n"
+        "📰 А ещё — о важных новостях по монете и о её листингах, 🆕 или обо всех листингах "
+        "и делистингах Binance и Bybit."
+    )
+    if lines:
+        text += f"\n\n<b>Активные ({len(lines)} из {limit}):</b>\n" + "\n".join(f"• {ln}" for ln in lines)
+        text += "\n\n<i>Нажми на слежку ниже, чтобы удалить.</i>"
+    return text
+
+
+WATCH_ASK = (
+    "🔔 Пришли условие: тикер и уровень цены или процент.\n\n"
+    "<i>Например: BTC &gt; 120000 · ETH &lt; 3000 · SOL ±5% · TON +10%</i>"
+)
+
+
+def watch_ask_for(symbol: str, price: str | None) -> str:
+    now = f" (сейчас {price})" if price else ""
+    return (
+        f"🔔 Слежка за <b>{esc(symbol)}</b>{now}.\n"
+        "Пришли уровень или процент:\n\n"
+        "<i>&gt; 120000 · &lt; 95000 · ±5% · +10%</i>"
+    )
+
+
+WATCH_BAD = (
+    "Не понял условие 🤔 Примеры:\n"
+    "<code>BTC &gt; 120000</code> · <code>ETH &lt; 3000</code> · <code>SOL ±5%</code> · <code>TON +10%</code>"
+)
+WATCH_LIMIT = "Достигнут лимит слежек. Удали ненужную, чтобы добавить новую."
+
+
+def watch_no_price(symbol: str) -> str:
+    return f"Не нашёл цену {esc(symbol)} на биржах. Проверь тикер и пришли условие ещё раз."
+
+
+def watch_saved(desc: str, price: str) -> str:
+    return f"✅ Слежка добавлена: <b>{desc}</b>\nСейчас: {price}. Проверяю каждую минуту."
+
+
+def watch_already(desc: str) -> str:
+    return f"Условие уже выполнено: {desc}. Поставь другой уровень."
+
+
+NEWS_ASK = "📰 Новости какой монеты присылать? Пришли тикер, например: <b>SOL</b>."
+NEWS_BAD = "Не похоже на тикер. Пришли, например: <b>SOL</b> или <b>$PEPE</b>."
+
+
+def news_saved(symbol: str) -> str:
+    s = esc(symbol)
+    return (
+        f"📰 Готово: пришлю важные новости по <b>{s}</b> и сообщу, если {s} залистят или делистнут "
+        "на Binance или Bybit.\n\n"
+        "<i>Важные — те, что подхватили несколько изданий, или про листинг, взлом, ETF, суды, разлоки, "
+        "обновления сети. Не больше 4 уведомлений в сутки, проверка раз в 5 минут.</i>"
+    )
+
+
+def news_exists(symbol: str) -> str:
+    return f"📰 Уже слежу за новостями {esc(symbol)}."
+
+
+LISTINGS_ON = (
+    "🆕 Включил: пришлю, когда на Binance или Bybit (спот и фьючерсы) появится новая пара "
+    "или монету снимут с торгов. Проверка раз в 5 минут."
+)
+LISTINGS_OFF = "🆕 Уведомления о листингах выключены."
+ALERT_OFF = "🔕 Больше не присылаю"
+DEX_WATCH_OFF = "🔕 Больше не присылаю новые токены."
+
+
+def dex_watch_on(chain: str | None) -> str:
+    where = f" в сети {chain}" if chain else " во всех сетях"
+    return (
+        f"🔔 Буду присылать новые токены{where}, которые прошли скам-чек на 🟢 и уже торгуются: "
+        "ликвидность от $20K, 30+ покупок за час. Не больше 10 в сутки."
+    )
+
+
+def watch_triggered(desc: str, price: str) -> str:
+    return f"🔔 <b>Слежка сработала</b>\n{desc}\nСейчас: <b>{price}</b>"
+
+
+# --- профиль и помощь -----------------------------------------------------------------------
+
+
+def profile(user: User | None, user_id: int, quota: QuotaStatus, total: int, skills: int, watches: int) -> str:
+    name = esc(user.first_name or user.username or "—") if user else "—"
+    since = user.created_at[:10] if user else "—"
+    if quota.unlimited:
+        q = "безлимит"
+    else:
+        q = f"{progress_bar(quota.pct)} {quota.pct}% ({quota.left} из {quota.limit})"
+    plan = {"free": "Free"}.get(user.plan, user.plan) if user else "Free"
+    return (
+        "👤 <b>Профиль</b>\n\n"
+        f"Имя: {name}\n"
+        f"ID: <code>{user_id}</code>\n"
+        f"Тариф: {esc(plan)}\n"
+        f"Запас на сегодня: {q}\n"
+        f"Разборов всего: {total}\n"
+        f"Навыков: {skills} · Слежек: {watches}\n"
+        f"С нами с {since}"
+    )
+
+
+HELP_SKILLS = (
+    "🔎 Разбор монеты — цена, биржи и спред, объёмы, капа, ATH\n"
+    "📈 Деривативы — фандинг, открытый интерес, лонги/шорты, опционы\n"
+    "📐 Теханализ и 🎯 тейки — тренд, RSI, MACD, уровни, сетап с входом, стопом и тремя тейками; "
+    "таймфрейм 1ч, 4ч или 1д\n"
+    "〽️ Дивергенции и 🌪 волатильность — разворот выдыхается или нет, сжатие перед движением\n"
+    "💥 Ликвидации, 🔓 разлоки, 🐋 киты — кого выносят, что разблокируют, кто несёт монеты на биржи\n"
+    "📷 Скриншот графика — пришли картинку, ИИ разберёт её вместе с данными бирж\n"
+    "🛡 Проверка контракта — honeypot, налоги, ликвидность, держатели\n"
+    "⚖️ Сравнение — до трёх монет в одной таблице\n"
+    "🌍 Рынок — капа, доминация BTC, страх и жадность, макро\n"
+    "📊 Скринер — фандинг, рост, падение, аномальные объёмы, новые листинги\n"
+    "🧪 Новые токены на DEX — через минуты после запуска, с автоматическим скам-чеком\n"
+    "⛓ Ончейн и DeFi — MVRV, активность сети, TVL, выручка\n"
+    "📰 Новости и соцсети — 50+ лент, объявления бирж, Telegram-каналы, Reddit, StockTwits\n"
+    "🐝 Рой агентов — 5 ИИ-специалистов на сложные вопросы: «подробно», сравнение, «стоит ли»\n"
+    "🔔 Слежки — напишу, когда цена дойдёт до уровня\n"
+    "🧠 Навыки — новости, перегрев, риск, арбитраж, коротко, скам-чек и твои правила"
+)
+
+HELP_EXAMPLES = (
+    "<code>разбери $HYPE</code>\n"
+    "<code>что с фандингом и OI по BTC</code>\n"
+    "<code>тейки по BTC</code> · <code>тейки SOL 1ч</code> · <code>теханализ ETH дневка</code>\n"
+    "<code>есть дивер на BTC?</code> · <code>волатильность ETH</code> · <code>свод BTC</code>\n"
+    "📷 скриншот графика с подписью <code>SOL 4ч</code>\n"
+    "<code>сравни ARB и OP</code>\n"
+    "<code>разбери BTC подробно</code> — рой ИИ-агентов\n"
+    "<code>0x6982508145454Ce325dDbE47a25d4ec3d2311933</code> — проверка на скам\n"
+    "<code>что сейчас на рынке?</code>\n"
+    "<code>что такое сквиз лонгов</code> — словарь трейдера, без монеты\n"
+    "<code>где самый высокий фандинг</code> — скринер рынка\n"
+    "<code>новые токены на солане</code> — свежие пулы DEX со скам-чеком\n"
+    "<code>разбери BTC навык перегрев</code>\n"
+    "<code>SOL навык риск депозит 2000 риск 2%</code>\n"
+    "<code>BTC &gt; 120000</code> — в разделе 🔔 Слежки"
+)
+
+
+def help_text(
+    bot_username: str | None,
+    limit: int,
+    quota: QuotaStatus | None,
+    stats: dict[str, int],
+    ai: str,
+    rules_url: str = "",
+    *,
+    admin: bool = False,
+) -> str:
+    """quota=None — в группе: личный остаток запаса там не показываем."""
+    mention = f"@{esc(bot_username)}" if bot_username else "меня"
+    if quota is None:
+        left = "считается для каждого отдельно"
+    elif quota.unlimited:
+        left = "у тебя безлимит"
+    else:
+        left = f"сегодня осталось {quota.left} из {quota.limit}"
+    ai_line = (
+        "рой ИИ-агентов" if ai.startswith("рой") else ("ИИ-аналитик" if ai != "выключен" else "выводы по правилам")
+    )
+    parts = [
+        "❓ <b>Помощь</b>\n\n"
+        "Пиши как в чате: тикер, вопрос или пересланный пост — соберу данные "
+        f"из {stats['active']} источников и отвечу с цифрами. Разделы ниже раскрываются нажатием.",
+        f"<b>Что умею</b>\n<blockquote expandable>{HELP_SKILLS}</blockquote>",
+        f"<b>Примеры вопросов</b>\n<blockquote expandable>{HELP_EXAMPLES}</blockquote>",
+        "<b>В чатах</b>\n<blockquote>"
+        f"Добавь меня в группу и упомяни {mention} с вопросом — или ответь на моё сообщение.\n"
+        "Ещё можно командой: <code>/ask BTC</code></blockquote>",
+        "<b>Лимиты</b>\n<blockquote>"
+        f"{limit} {plural(limit, 'разбор', 'разбора', 'разборов')} в сутки, запас обновляется в 00:00 UTC — {left}.\n"
+        "Слежки работают без лимита.</blockquote>",
+        f"<i>Сейчас работает: {ai_line}{' · /sources — все источники' if admin else ''}. Не финансовый совет.</i>",
+    ]
+    if rules_url:
+        parts.append(f'<a href="{esc_attr(rules_url)}">Правила использования</a>')
+    return "\n\n".join(parts)
+
+
+def sources_screen(stats: dict[str, int], per_cat: dict[Category, tuple[int, int, int]]) -> str:
+    lines = [
+        "🔌 <b>Источники данных</b>\n",
+        f"В каталоге: <b>{stats['total']}</b>",
+        f"✅ Подключено: <b>{stats['active']}</b> · 🔑 ждут API-ключ: {stats['needs_key']} · "
+        f"🛠 в планах: {stats['planned']}" + (f" · ⏸ выключено: {stats['disabled']}" if stats["disabled"] else ""),
+        "",
+    ]
+    for cat, (active, implemented, total) in per_cat.items():
+        icon, label = CATEGORY_META[cat]
+        lines.append(
+            f"{icon} {label} — {active} из {total}"
+            + (f" (+{implemented - active} с ключом)" if implemented > active else "")
+        )
+    lines.append("\n<i>Полный список — docs/SOURCES.md в репозитории.</i>")
+    return "\n".join(lines)
+
+
+# --- разбор ----------------------------------------------------------------------------------
+
+
+def quota_empty(limit: int) -> str:
+    return f"⏳ Запас на сегодня закончился ({limit} разборов). Обновится в 00:00 UTC.\nСлежки продолжают работать."
+
+
+BUSY = "⏳ Ещё разбираю прошлый запрос — секунду…"
+NOT_FOUND = (
+    "Не нашёл монету в вопросе 🤔\n\n"
+    "Напиши тикер (<code>BTC</code>, <code>$HYPE</code>), адрес контракта, "
+    "спроси про рынок: <i>что сейчас на рынке?</i> — или про термин: <i>что такое сквиз лонгов?</i>"
+)
+
+
+def explain_unknown(terms: list[str]) -> str:
+    """Вопрос без монеты, термина нет в словаре, ключа ИИ нет."""
+    return (
+        "📖 Такого термина нет в моём словаре, а вопросы своими словами я понимаю только с ключом ИИ.\n\n"
+        "Могу объяснить: " + ", ".join(esc(t) for t in terms) + " и другие — спроси «что такое …».\n"
+        "А ещё — разобрать монету (<code>BTC</code>) или рынок (<i>что сейчас на рынке?</i>)."
+    )
+
+
+def not_listed(what: str) -> str:
+    return f"Не нашёл данных по <b>{esc(what)}</b> 🤷\nПроверь тикер или пришли адрес контракта. Запас не списан."
+
+
+GROUP_HINT = "Спроси меня так: <code>@{bot} BTC</code> или <code>/ask BTC</code>"
+
+ADMIN_ONLY = "Этот раздел — только для админа бота."
+ERROR = "😵 Что-то пошло не так при разборе. Попробуй ещё раз через минуту — запас не списан."
+
+EMOJI_HELP = (
+    "✨ <b>Свой эмодзи в меню</b>\n\n"
+    "Пришли имя эмодзи-пака или ссылку на него: <code>/emoji gyvex_logo</code> или "
+    "<code>/emoji t.me/addemoji/gyvex_logo</code> — найду номер эмодзи.\n"
+    "Или просто пришли сюда стикер или сообщение с этим эмодзи."
+)
+
+
+def emoji_ids(title: str, items: list[tuple[str, str]]) -> str:
+    rows = "\n".join(f"{esc(alt)} — <code>{esc(eid)}</code>" for alt, eid in items)
+    eid, alt = items[0][1], items[0][0] or "✨"
+    return (
+        f"✨ Пак «<b>{esc(title)}</b>»:\n{rows}\n\n"
+        "Чтобы эмодзи стоял в меню перед названием, впиши в настройки (<code>tg-trending config</code>):\n"
+        f"<code>BRAND_EMOJI_ID={esc(eid)}</code>\n<code>BRAND_EMOJI_ALT={esc(alt)}</code>\n\n"
+        "<i>Telegram показывает свои эмодзи в сообщениях бота, только если у бота есть купленное имя на "
+        "Fragment. Без него в меню останется обычный знак — бот переключится сам.</i>"
+    )
+
+
+def emoji_not_found(name: str) -> str:
+    return f"Не нашёл пак «{esc(name)}». Проверь имя — это часть ссылки после <code>t.me/addemoji/</code>."
+
+
+def emoji_wrong_pack(title: str) -> str:
+    return (
+        f"«{esc(title)}» — это обычный стикерпак, а в текст сообщения встают только эмодзи из "
+        "<b>эмодзи-пака</b>. Создай его в @Stickers командой /newemojipack с тем же PNG, затем пришли "
+        "<code>/emoji имя_пака</code>."
+    )
+
+
+def sticker_is_regular(set_name: str | None) -> str:
+    where = f" из пака «{esc(set_name)}»" if set_name else ""
+    return (
+        f"Это обычный стикер{where}. Стикеры нельзя вставить в текст — для меню нужен эмодзи из "
+        "<b>эмодзи-пака</b>: @Stickers → /newemojipack. Если эмодзи-пак уже есть — пришли "
+        "<code>/emoji имя_пака</code>."
+    )
+
+
+CHART_NO_AI = (
+    "📷 Скриншоты графиков разбирает ИИ — нужен ключ модели, которая видит картинки "
+    "(Claude, GPT или Gemini).\n\n"
+    "Пока можно словами — посчитаю по свечам бирж: <i>«тейки по BTC»</i>, <i>«теханализ ETH»</i>."
+)
+CHART_BAD_TYPE = "📷 Пришли картинку в JPG, PNG, WEBP или GIF — этот файл я прочитать не могу."
+CHART_TOO_BIG = "📷 Картинка больше 5 МБ — пришли её как фото, Telegram сам её сожмёт."
+
+
+def chart_failed(model: str, reason: str) -> str:
+    return (
+        f"😵 Модель {esc(model)} не смогла прочитать картинку ({esc(reason)}). Если она не принимает изображения, "
+        "укажи в настройках VISION_MODEL — модель, которая их видит: Claude, GPT или Gemini. Запас не списан."
+    )
+
+
+NO_LAST = "Не помню прошлый запрос — пришли его ещё раз."
