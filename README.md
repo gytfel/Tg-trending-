@@ -1,7 +1,7 @@
 # Tg-trending — Telegram-бот «ИИ-аналитик» для крипторынка
 
 Бот разбирает монету по тикеру, адресу контракта или вопросу своими словами.
-Он параллельно опрашивает **130+ источников без ключей** (всего в каталоге 234),
+Он параллельно опрашивает **160+ источников без ключей** (всего в каталоге 260),
 собирает отчёт и даёт вывод через Claude. Ещё в боте есть слежки за ценой и
 «навыки»: 14 встроенных (в том числе теханализ, тейки, дивергенции, волатильность, ликвидации, разлоки, киты и свод), которые работают даже без ключа ИИ, и свои — сохранённые
 правила и шаблоны ответа.
@@ -125,7 +125,8 @@
 
 ## 📰 Слежка за новостями и листингами
 
-**Новости по монете.** Раз в 5 минут бот собирает свежие заголовки 30+ изданий и Google News,
+**Новости по монете.** Раз в 5 минут бот собирает свежие заголовки 50+ изданий, объявления
+Binance, Bybit, OKX и KuCoin (о листинге там пишут раньше всех), новостные Telegram-каналы и Google News,
 выбирает те, где упомянута монета, и склеивает заголовки об одном событии из разных изданий
 в одну историю. Уведомление приходит, если история **важная**: её подхватили хотя бы 2 издания
 или в заголовке ключевое событие — листинг и делистинг, взлом, ETF, SEC и суды, разлок,
@@ -146,6 +147,11 @@ CoinDesk, The Block, Decrypt — 3 источника · 40 мин назад
 списка) пропускается, чтобы сбой не выглядел как массовый делистинг. Тем, кто следит за
 новостями монеты, листинг и делистинг этой монеты приходят тоже; а «🆕 Все листинги» —
 сводка по всем новым и снятым парам.
+
+**Telegram-каналы.** Публичные каналы бот читает через веб-превью `t.me/s/<канал>` — без
+аккаунта и ключа; заголовок — первая строка поста. Список — `NEWS_TG_CHANNELS` в `.env` через
+запятую (до 15), по умолчанию: binance_announcements, wublockchainenglish, cointelegraph,
+WatcherGuru, forklog, incrypted.
 
 Включается кнопкой «📰 Новости BTC» под разбором, в разделе «🔔 Слежки» («+ 📰 Новости монеты»,
 «🆕 Все листинги») или словами: «следи за новостями SOL», «следи за листингами». ИИ не нужен.
@@ -399,7 +405,7 @@ python -m bot.sources.probe BTC --only binance,okx,coingecko -v
 | ⛓ Ончейн | 8 + 2 / 24 | mempool.space, Blockchain.com, Blockchair, Coin Metrics (MVRV, активные адреса), газ ETH, Solana RPC; Etherscan и Whale Alert (киты) по ключу |
 | 🛡 Безопасность | 3 / 9 | GoPlus (EVM и Solana), Honeypot.is, RugCheck |
 | 🌡 Настроения | 1 + 2 / 9 | Fear & Greed; CMC F&G и LunarCrush по ключу |
-| 📰 Новости | 32 + 3 / 40 | 30 RSS-лент (CoinDesk, Cointelegraph, The Block, Decrypt, ForkLog, Incrypted…; если сайт закрыт для ботов — его заголовки через Google News), Google News EN/RU; CryptoCompare News по ключу |
+| 📰 Новости | 57 + 6 / 67 | 50 RSS-лент (CoinDesk, Cointelegraph, The Block, Decrypt, DL News, Protos, Wu Blockchain, блоги Ethereum и Kraken, ForkLog, Incrypted, BeInCrypto RU…; если сайт закрыт для ботов или лента переехала — его заголовки через Google News), объявления Binance, Bybit, OKX и KuCoin, Telegram-каналы, Google News EN/RU; CryptoPanic, NewsAPI, NewsData.io, Finnhub, GNews, CryptoCompare по ключу |
 | 💬 Соцсети | 5 / 13 | Reddit, 4chan /biz/, StockTwits, Hacker News, Mastodon |
 | 🌍 Макро | 3 + 1 / 9 | Yahoo Finance (DXY, S&P 500, Nasdaq, золото, VIX, UST 10Y), курсы ЕЦБ и ЦБ РФ; FRED по ключу |
 
@@ -485,7 +491,7 @@ bot/
     http.py          aiohttp + TTL-кеш + склейка запросов
     resolver.py      тикер → CoinGecko id/имя; контракт → сеть/тикер (DexScreener)
     providers/       cex, derivatives, aggregators, dex, defi, onchain,
-                     security, sentiment, news, social, macro
+                     security, sentiment, news, announcements, flows, social, macro
     probe.py         CLI-проверка и генерация каталога
   render/
     cards.py         рисует карточки (Pillow): рынок, монета, контракт, сравнение

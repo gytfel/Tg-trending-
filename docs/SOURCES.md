@@ -2,7 +2,7 @@
 
 > Файл сгенерирован командой `python -m bot.sources.probe --catalog docs/SOURCES.md`.
 
-Всего: **234** · ✅ подключено без ключа: **136** · 🔑 подключено, нужен ключ: **17** · 🛠 в планах: **81**
+Всего: **260** · ✅ подключено без ключа: **161** · 🔑 подключено, нужен ключ: **20** · 🛠 в планах: **79**
 
 
 ## 📊 Агрегаторы (26)
@@ -217,52 +217,79 @@
 | `cfgi` | [CFGI.io](https://cfgi.io) | 🛠 в планах | — | страх/жадность по монетам |
 | `santiment` | [Santiment](https://santiment.net) | 🛠 в планах | — | social volume, weighted sentiment |
 
-## 📰 Новости (40)
+## 📰 Новости (67)
 
 | id | Источник | Статус | Запросы | Примечание |
 |---|---|---|---|---|
-| `ambcrypto` | [AMBCrypto](https://ambcrypto.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `beincrypto` | [BeInCrypto](https://beincrypto.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `bitcoincom` | [Bitcoin.com News](https://news.bitcoin.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `bitcoinist` | [Bitcoinist](https://bitcoinist.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `bitcoinmagazine` | [Bitcoin Magazine](https://bitcoinmagazine.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `bitsmedia` | [Bits.media (RU)](https://bits.media) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `blockworks` | [Blockworks](https://blockworks.co) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `coindesk` | [CoinDesk](https://www.coindesk.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `coingape` | [CoinGape](https://coingape.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `coinjournal` | [CoinJournal](https://coinjournal.net) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `coinpedia` | [Coinpedia](https://coinpedia.org) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `cointelegraph` | [Cointelegraph](https://cointelegraph.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `cryptobriefing` | [Crypto Briefing](https://cryptobriefing.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `cryptodaily` | [Crypto Daily](https://cryptodaily.co.uk) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `cryptonews` | [Cryptonews](https://cryptonews.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `cryptonewsnet` | [crypto.news](https://crypto.news) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `cryptopotato` | [CryptoPotato](https://cryptopotato.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `cryptoslate` | [CryptoSlate](https://cryptoslate.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `dailyhodl` | [The Daily Hodl](https://dailyhodl.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `decrypt` | [Decrypt](https://decrypt.co) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `finbold` | [Finbold](https://finbold.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `forklog` | [ForkLog (RU)](https://forklog.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `ambcrypto` | [AMBCrypto](https://ambcrypto.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `beincrypto` | [BeInCrypto](https://beincrypto.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `beincrypto_ru` | [BeInCrypto (RU)](https://ru.beincrypto.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `binance_announcements` | [Binance Announcements](https://www.binance.com/en/support/announcement) | ✅ | любой | листинги, делистинги, запуски — раньше всех |
+| `bitcoincom` | [Bitcoin.com News](https://news.bitcoin.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `bitcoinist` | [Bitcoinist](https://bitcoinist.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `bitcoinmagazine` | [Bitcoin Magazine](https://bitcoinmagazine.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `bitnovosti` | [Bitnovosti (RU)](https://bitnovosti.io) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `bitsmedia` | [Bits.media (RU)](https://bits.media) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `blockonomi` | [Blockonomi](https://blockonomi.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `blockworks` | [Blockworks](https://blockworks.co) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `bybit_announcements` | [Bybit Announcements](https://announcements.bybit.com) | ✅ | любой | листинги, делистинги, запуски — раньше всех |
+| `ccn` | [CCN](https://www.ccn.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `chainalysis` | [Chainalysis Blog](https://www.chainalysis.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `coincentral` | [CoinCentral](https://coincentral.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `coindesk` | [CoinDesk](https://www.coindesk.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `coingape` | [CoinGape](https://coingape.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `coinjournal` | [CoinJournal](https://coinjournal.net) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `coinpedia` | [Coinpedia](https://coinpedia.org) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `coinspeaker` | [Coinspeaker](https://www.coinspeaker.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `coinspot` | [Coinspot (RU)](https://coinspot.io) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `cointelegraph` | [Cointelegraph](https://cointelegraph.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `cryptobriefing` | [Crypto Briefing](https://cryptobriefing.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `cryptodaily` | [Crypto Daily](https://cryptodaily.co.uk) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `cryptoeconomy` | [Crypto Economy](https://crypto-economy.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `cryptonews` | [Cryptonews](https://cryptonews.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `cryptonewsnet` | [crypto.news](https://crypto.news) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `cryptoninjas` | [CryptoNinjas](https://www.cryptoninjas.net) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `cryptopolitan` | [Cryptopolitan](https://www.cryptopolitan.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `cryptopotato` | [CryptoPotato](https://cryptopotato.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `cryptoslate` | [CryptoSlate](https://cryptoslate.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `cryptotimes` | [The Crypto Times](https://www.cryptotimes.io) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `dailyhodl` | [The Daily Hodl](https://dailyhodl.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `decrypt` | [Decrypt](https://decrypt.co) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `dlnews` | [DL News](https://www.dlnews.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `ethereum_blog` | [Ethereum Foundation Blog](https://blog.ethereum.org) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `finbold` | [Finbold](https://finbold.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `forklog` | [ForkLog (RU)](https://forklog.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
 | `google_news` | [Google News (EN)](https://news.google.com) | ✅ | любой |  |
 | `google_news_ru` | [Google Новости (RU)](https://news.google.com/?hl=ru) | ✅ | любой |  |
-| `incrypted` | [Incrypted (RU)](https://incrypted.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `newsbtc` | [NewsBTC](https://www.newsbtc.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `theblock` | [The Block](https://www.theblock.co) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `thecryptobasic` | [The Crypto Basic](https://thecryptobasic.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `thedefiant` | [The Defiant](https://thedefiant.io) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `utoday` | [U.Today](https://u.today) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `watcherguru` | [Watcher.Guru](https://watcher.guru) | ✅ | любой | закрыт для ботов — заголовки через Google News |
-| `zycrypto` | [ZyCrypto](https://zycrypto.com) | ✅ | любой | закрыт для ботов — заголовки через Google News |
+| `hashtelegraph` | [Hash Telegraph (RU)](https://hashtelegraph.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `incrypted` | [Incrypted (RU)](https://incrypted.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `kraken_blog` | [Kraken Blog](https://blog.kraken.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `kucoin_announcements` | [KuCoin Announcements](https://www.kucoin.com/announcement) | ✅ | любой | листинги, делистинги, запуски — раньше всех |
+| `newsbtc` | [NewsBTC](https://www.newsbtc.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `okx_announcements` | [OKX Announcements](https://www.okx.com/help/category/announcements) | ✅ | любой | листинги, делистинги, запуски — раньше всех |
+| `protos` | [Protos](https://protos.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `telegram_channels` | [Telegram-каналы](https://t.me) | ✅ | любой | публичные каналы через t.me/s — список в NEWS_TG_CHANNELS |
+| `theblock` | [The Block](https://www.theblock.co) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `thecoinrepublic` | [The Coin Republic](https://www.thecoinrepublic.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `thecryptobasic` | [The Crypto Basic](https://thecryptobasic.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `thedefiant` | [The Defiant](https://thedefiant.io) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `unchained` | [Unchained](https://unchainedcrypto.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `utoday` | [U.Today](https://u.today) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `watcherguru` | [Watcher.Guru](https://watcher.guru) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `wublockchain` | [Wu Blockchain](https://wublock.substack.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
+| `zycrypto` | [ZyCrypto](https://zycrypto.com) | ✅ | любой | если лента закрыта или переехала — заголовки через Google News |
 | `cryptocompare_news` | [CryptoCompare News](https://www.cryptocompare.com/news/) | 🔑 `CRYPTOCOMPARE_API_KEY` | любой | платная подписка CoinDesk Data |
 | `cryptopanic` | [CryptoPanic](https://cryptopanic.com) | 🔑 `CRYPTOPANIC_API_KEY` | любой |  |
+| `finnhub_news` | [Finnhub](https://finnhub.io) | 🔑 `FINNHUB_API_KEY` | любой |  |
+| `gnews` | [GNews](https://gnews.io) | 🔑 `GNEWS_API_KEY` | любой |  |
 | `newsapi` | [NewsAPI](https://newsapi.org) | 🔑 `NEWSAPI_KEY` | любой |  |
-| `binance_announcements` | [Binance Announcements](https://www.binance.com/en/support/announcement) | 🛠 в планах | — | листинги/делистинги |
+| `newsdata` | [NewsData.io](https://newsdata.io) | 🔑 `NEWSDATA_API_KEY` | любой |  |
 | `tree_of_alpha` | [Tree of Alpha](https://news.treeofalpha.com) | 🛠 в планах | — | быстрая лента, websocket |
 | `coindesk_data_news` | [CoinDesk Data News API](https://developers.coindesk.com) | 🛠 в планах | — |  |
 | `coinmarketcal` | [CoinMarketCal](https://coinmarketcal.com) | 🛠 в планах | — | календарь событий |
 | `messari_news` | [Messari News](https://messari.io/news) | 🛠 в планах | — |  |
 
-## 💬 Соцсети (13)
+## 💬 Соцсети (12)
 
 | id | Источник | Статус | Запросы | Примечание |
 |---|---|---|---|---|
@@ -274,7 +301,6 @@
 | `bluesky` | [Bluesky](https://bsky.app) | 🛠 в планах | — | поиск требует авторизации |
 | `discord` | [Discord-сообщества](https://discord.com) | 🛠 в планах | — | через бота-наблюдателя |
 | `google_trends` | [Google Trends](https://trends.google.com) | 🛠 в планах | — | нет официального API |
-| `telegram_channels` | [Telegram-каналы](https://telegram.org) | 🛠 в планах | — | через MTProto (Telethon) |
 | `farcaster` | [Farcaster (Neynar)](https://neynar.com) | 🛠 в планах | — |  |
 | `github` | [GitHub (активность разработки)](https://github.com) | 🛠 в планах | — |  |
 | `x_twitter` | [X (Twitter)](https://x.com) | 🛠 в планах | — | упоминания, KOL |

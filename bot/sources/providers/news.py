@@ -119,13 +119,40 @@ FEEDS: list[tuple[str, str, str, str]] = [
     ("forklog", "ForkLog (RU)", "https://forklog.com/feed", "https://forklog.com"),
     ("incrypted", "Incrypted (RU)", "https://incrypted.com/feed/", "https://incrypted.com"),
     ("bitsmedia", "Bits.media (RU)", "https://bits.media/rss2/", "https://bits.media"),
+    # --- добавлены позже: расследования, Азия, официальные блоги, ещё русские издания
+    ("dlnews", "DL News", "https://www.dlnews.com/arc/outboundfeeds/rss/", "https://www.dlnews.com"),
+    ("protos", "Protos", "https://protos.com/feed/", "https://protos.com"),
+    ("unchained", "Unchained", "https://unchainedcrypto.com/feed/", "https://unchainedcrypto.com"),
+    ("wublockchain", "Wu Blockchain", "https://wublock.substack.com/feed", "https://wublock.substack.com"),
+    ("ccn", "CCN", "https://www.ccn.com/feed/", "https://www.ccn.com"),
+    ("cryptopolitan", "Cryptopolitan", "https://www.cryptopolitan.com/feed/", "https://www.cryptopolitan.com"),
+    ("coinspeaker", "Coinspeaker", "https://www.coinspeaker.com/feed/", "https://www.coinspeaker.com"),
+    ("coincentral", "CoinCentral", "https://coincentral.com/feed/", "https://coincentral.com"),
+    ("cryptotimes", "The Crypto Times", "https://www.cryptotimes.io/feed/", "https://www.cryptotimes.io"),
+    (
+        "thecoinrepublic",
+        "The Coin Republic",
+        "https://www.thecoinrepublic.com/feed/",
+        "https://www.thecoinrepublic.com",
+    ),
+    ("blockonomi", "Blockonomi", "https://blockonomi.com/feed/", "https://blockonomi.com"),
+    ("cryptoninjas", "CryptoNinjas", "https://www.cryptoninjas.net/feed/", "https://www.cryptoninjas.net"),
+    ("cryptoeconomy", "Crypto Economy", "https://crypto-economy.com/feed/", "https://crypto-economy.com"),
+    ("ethereum_blog", "Ethereum Foundation Blog", "https://blog.ethereum.org/feed.xml", "https://blog.ethereum.org"),
+    ("kraken_blog", "Kraken Blog", "https://blog.kraken.com/feed", "https://blog.kraken.com"),
+    ("chainalysis", "Chainalysis Blog", "https://www.chainalysis.com/feed/", "https://www.chainalysis.com"),
+    ("beincrypto_ru", "BeInCrypto (RU)", "https://ru.beincrypto.com/feed/", "https://ru.beincrypto.com"),
+    ("bitnovosti", "Bitnovosti (RU)", "https://bitnovosti.io/feed/", "https://bitnovosti.io"),
+    ("coinspot", "Coinspot (RU)", "https://coinspot.io/feed/", "https://coinspot.io"),
+    ("hashtelegraph", "Hash Telegraph (RU)", "https://hashtelegraph.com/feed/", "https://hashtelegraph.com"),
 ]
 
 
 # RSS просим как RSS: часть сайтов отвечает 403 на «Accept: application/json»
 FEED_HEADERS = {"Accept": "application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5"}
-# сайт закрыт для ботов (Cloudflare и т. п.) или временно недоступен
-BLOCKED = {401, 403, 429, 503}
+# сайт закрыт для ботов (Cloudflare и т. п.), временно недоступен или лента переехала
+BLOCKED = {401, 403, 404, 410, 429, 503}
+_FEED_ROOT = re.compile(r"<(?:rss|feed|rdf:RDF)\b", re.I)
 _PUBLISHER = re.compile(r"\s+[-–—|]\s+[^-–—|]{2,40}$")
 
 
@@ -142,11 +169,16 @@ async def site_news(ctx: Ctx, homepage: str, name: str) -> list[NewsItem]:
 async def feed_items(http: Http, name: str, url: str, homepage: str, ttl: float = 600) -> list[NewsItem]:
     """Вся лента издания (для разбора берём 5 релевантных, для слежки за новостями — всё)."""
     try:
-        return parse_feed(await http.get_text(url, headers=FEED_HEADERS, ttl=ttl), name)
+        text = await http.get_text(url, headers=FEED_HEADERS, ttl=ttl)
+        if _FEED_ROOT.search(text[:2000]):
+            return parse_feed(text, name)
+        # вместо ленты отдали HTML-страницу (заглушка, капча) — тоже идём в Google News
     except HttpError as e:
         if e.status not in BLOCKED:
             raise
-        return await site_news(Ctx(http=http, asset=None), homepage, name)
+    except ET.ParseError:
+        pass
+    return await site_news(Ctx(http=http, asset=None), homepage, name)
 
 
 async def google_coin_news(http: Http, query: str, ttl: float = 600) -> list[NewsItem]:
@@ -167,7 +199,7 @@ def _make_rss_source(sid: str, name: str, url: str, homepage: str) -> None:
         category=Category.NEWS,
         scope=Scope.ANY,
         homepage=homepage,
-        note="закрыт для ботов — заголовки через Google News",
+        note="если лента закрыта или переехала — заголовки через Google News",
     )
     async def _rss(ctx: Ctx):
         return relevant(await feed_items(ctx.http, name, url, homepage), ctx.asset)
@@ -288,6 +320,93 @@ async def cryptopanic(ctx: Ctx):
     return relevant(items, None)
 
 
+@source(
+    "newsdata",
+    "NewsData.io",
+    category=Category.NEWS,
+    scope=Scope.ANY,
+    homepage="https://newsdata.io",
+    key="NEWSDATA_API_KEY",
+)
+async def newsdata(ctx: Ctx):
+    params = {"apikey": ctx.key or "", "language": "en"}
+    if ctx.asset and ctx.asset.symbol:
+        params["coin"] = ctx.asset.symbol.lower()
+    d = await ctx.http.get_json("https://newsdata.io/api/1/crypto", params, ttl=900)
+    rows = d.get("results") if isinstance(d, dict) else None
+    if not isinstance(rows, list):
+        raise NoData("нет новостей")
+    items = [
+        NewsItem(
+            title=clean(r.get("title")),
+            url=r.get("link") or "",
+            published=parse_date(r.get("pubDate")),
+            source=r.get("source_name") or r.get("source_id") or "NewsData",
+        )
+        for r in rows
+        if isinstance(r, dict)
+    ]
+    return relevant([n for n in items if n.title and n.url], ctx.asset if "coin" not in params else None)
+
+
+@source(
+    "finnhub_news",
+    "Finnhub",
+    category=Category.NEWS,
+    scope=Scope.ANY,
+    homepage="https://finnhub.io",
+    key="FINNHUB_API_KEY",
+)
+async def finnhub_news(ctx: Ctx):
+    rows = await ctx.http.get_json(
+        "https://finnhub.io/api/v1/news", {"category": "crypto"}, headers={"X-Finnhub-Token": ctx.key or ""}, ttl=900
+    )
+    if not isinstance(rows, list):
+        raise NoData("нет новостей")
+    items = [
+        NewsItem(
+            title=clean(r.get("headline")),
+            url=r.get("url") or "",
+            published=datetime.fromtimestamp(r["datetime"], UTC) if isinstance(r.get("datetime"), int) else None,
+            source=r.get("source") or "Finnhub",
+        )
+        for r in rows
+        if isinstance(r, dict)
+    ]
+    return relevant([n for n in items if n.title and n.url], ctx.asset)  # лента общая — фильтруем по монете
+
+
+@source(
+    "gnews",
+    "GNews",
+    category=Category.NEWS,
+    scope=Scope.ANY,
+    homepage="https://gnews.io",
+    key="GNEWS_API_KEY",
+)
+async def gnews(ctx: Ctx):
+    q = _google_query(ctx.asset, "crypto")
+    d = await ctx.http.get_json(
+        "https://gnews.io/api/v4/search",
+        {"q": q, "lang": "en", "max": 10, "sortby": "publishedAt", "apikey": ctx.key or ""},
+        ttl=1800,  # бесплатно 100 запросов в сутки — кешируем дольше
+    )
+    rows = d.get("articles") if isinstance(d, dict) else None
+    if not isinstance(rows, list):
+        raise NoData("нет новостей")
+    items = [
+        NewsItem(
+            title=clean(a.get("title")),
+            url=a.get("url") or "",
+            published=parse_date(a.get("publishedAt")),
+            source=(a.get("source") or {}).get("name") or "GNews",
+        )
+        for a in rows
+        if isinstance(a, dict)
+    ]
+    return relevant([n for n in items if n.title and n.url], None)
+
+
 # --- в каталоге, ещё не подключены ---------------------------------------------
 planned("messari_news", "Messari News", Category.NEWS, "https://messari.io/news", key="MESSARI_API_KEY")
 planned(
@@ -296,13 +415,6 @@ planned(
     Category.NEWS,
     "https://developers.coindesk.com",
     key="COINDESK_API_KEY",
-)
-planned(
-    "binance_announcements",
-    "Binance Announcements",
-    Category.NEWS,
-    "https://www.binance.com/en/support/announcement",
-    note="листинги/делистинги",
 )
 planned(
     "coinmarketcal",

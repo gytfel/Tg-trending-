@@ -117,9 +117,6 @@ async def mastodon(ctx: Ctx):
 
 # --- в каталоге, ещё не подключены ---------------------------------------------
 planned("x_twitter", "X (Twitter)", Category.SOCIAL, "https://x.com", key="X_BEARER_TOKEN", note="упоминания, KOL")
-planned(
-    "telegram_channels", "Telegram-каналы", Category.SOCIAL, "https://telegram.org", note="через MTProto (Telethon)"
-)
 planned("youtube", "YouTube", Category.SOCIAL, "https://www.youtube.com", key="YOUTUBE_API_KEY")
 planned("farcaster", "Farcaster (Neynar)", Category.SOCIAL, "https://neynar.com", key="NEYNAR_API_KEY")
 planned("bluesky", "Bluesky", Category.SOCIAL, "https://bsky.app", note="поиск требует авторизации")

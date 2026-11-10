@@ -1,6 +1,7 @@
 """📰 Слежка за новостями и листингами — фоновая проверка раз в 5 минут.
 
-Новости по монете. Бот собирает свежие заголовки 30+ изданий и Google News,
+Новости по монете. Бот собирает свежие заголовки 50+ изданий, объявления Binance,
+Bybit, OKX и KuCoin, новостные Telegram-каналы и Google News,
 выбирает те, где упомянута монета, и склеивает в «истории» заголовки об одном
 событии из разных изданий. История важная, если:
 - её подхватили хотя бы 2 издания, или
@@ -34,6 +35,7 @@ from bot.services.watches import ALL_LISTINGS, NEWS_KINDS
 from bot.sources.base import Asset, NewsItem, num
 from bot.sources.collector import NOT_IN_TOP
 from bot.sources.http import Http
+from bot.sources.providers.announcements import exchange_items, telegram_items
 from bot.sources.providers.news import FEEDS, feed_items, google_coin_news, mention_re
 from bot.sources.resolver import resolve_symbol
 
@@ -254,8 +256,16 @@ class NewsWatcher:
             except Exception:  # noqa: BLE001 — одно издание не должно мешать остальным
                 return []
 
+        async def first_hand() -> list[NewsItem]:
+            # объявления бирж и Telegram-каналы: о листинге там пишут раньше всех
+            try:
+                ex, tg = await asyncio.gather(exchange_items(self.http), telegram_items(self.http, ttl=FEED_TTL))
+            except Exception:  # noqa: BLE001
+                return []
+            return ex + tg
+
         out: list[NewsItem] = []
-        for items in await asyncio.gather(*(one(f) for f in FEEDS)):
+        for items in await asyncio.gather(*(one(f) for f in FEEDS), first_hand()):
             out += items
         return out
 
