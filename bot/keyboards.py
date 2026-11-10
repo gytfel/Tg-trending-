@@ -210,6 +210,18 @@ def report(symbol: str | None, details: bool = False, *, sources: bool = False) 
     return b.as_markup()
 
 
+def glossary(terms: list, *, ai: bool) -> InlineKeyboardMarkup:
+    """Под ответом из словаря: глубже с ИИ (если есть ключ) и «посмотреть вживую» на данных."""
+    b = InlineKeyboardBuilder()
+    if ai and terms:
+        b.button(text="🧠 Подробнее с ИИ", callback_data=Ask(symbol=f"?{terms[0].key}"), style=PRIMARY)
+    for live in dict.fromkeys(t.live for t in terms if t.live):
+        b.button(text=f"▶️ {live}", callback_data=Ask(symbol=live))
+    b.button(text="✱ Меню", callback_data=Nav(to="menu"))
+    b.adjust(1)
+    return b.as_markup()
+
+
 def back(to: str = "menu") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text=BACK, callback_data=Nav(to=to))

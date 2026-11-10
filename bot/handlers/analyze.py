@@ -27,7 +27,7 @@ from bot.handlers.screener import send_screen
 from bot.handlers.thinking import ThinkingMessage
 from bot.query_parser import parse_query
 from bot.render import Brand, render
-from bot.services import Services, dexscan, report, screener, skills_builtin
+from bot.services import Services, dexscan, glossary, report, screener, skills_builtin
 from bot.services.prose import CAPTION_LIMIT, visible_len
 
 log = logging.getLogger(__name__)
@@ -160,11 +160,35 @@ async def _send(msg: Message, text: str, kb: InlineKeyboardMarkup | None, edit: 
         return await msg.answer(_TAG.sub("", text), reply_markup=kb, parse_mode=None)
 
 
+def glossary_terms(text: str, parsed) -> list[glossary.Term]:
+    """Термины словаря в вопросе — если в нём нет монеты («MVRV», «L2» парсер принимает за тикеры)."""
+    if parsed.contracts:
+        return []
+    terms = glossary.find(text)
+    covered = all(any(t.pattern.search(sym) for t in terms) for sym in parsed.symbols)
+    return terms if terms and covered else []
+
+
+def _ai_on(svc: Services) -> bool:
+    return svc.llm.enabled or (svc.swarm is not None and svc.swarm.enabled)
+
+
+async def send_glossary(chat_msg: Message, terms: list[glossary.Term], svc: Services, *, reply: bool) -> None:
+    send = chat_msg.reply if reply else chat_msg.answer
+    await send(glossary.render(terms), reply_markup=keyboards.glossary(terms, ai=svc.llm.enabled))
+
+
 async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services, *, reply: bool = False) -> None:
     """reply=True — в группах отвечаем на сообщение пользователя, чтобы было видно, кому ответ."""
     respond = chat_msg.reply if reply else chat_msg.answer
     skills = await svc.db.list_skills(user_id)
     own = [s.name for s in skills]
+    deeper = False  # кнопка «🧠 Подробнее с ИИ» под ответом из словаря
+    if text.startswith("?") and (term := glossary.BY_KEY.get(text[1:])):
+        if not svc.llm.enabled:
+            await send_glossary(chat_msg, [term], svc, reply=reply)
+            return
+        text, deeper = f"Объясни подробнее, что такое «{term.title}»", True
     parsed = parse_query(text, own + skills_builtin.names(exclude=own))  # свои + встроенные навыки
     if (
         not parsed.skills
@@ -175,9 +199,22 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
         # «новые токены на солане» — свежие пулы DEX со скам-чеком, запас не тратим
         await send_screen(chat_msg, screen, svc, reply=reply, user_id=user_id)
         return
+    terms = [] if deeper else glossary_terms(text, parsed)
+    if terms and glossary.is_explain(text):
+        # «что такое сквиз лонгов» — ответ из словаря: мгновенно, без ИИ и без расхода запаса
+        await send_glossary(chat_msg, terms, svc, reply=reply)
+        return
     if parsed.is_empty and not parsed.skills and (screen := screener.detect(text)):
         # «где самый высокий фандинг», «что растёт» — списком по рынку, запас не тратим
         await send_screen(chat_msg, screen, svc, reply=reply, user_id=user_id)
+        return
+    if terms and glossary.bare(text, terms):  # «сквиз лонгов?» — тоже вопрос о термине
+        await send_glossary(chat_msg, terms, svc, reply=reply)
+        return
+    if parsed.is_empty and not parsed.market and glossary.is_explain(text) and not _ai_on(svc):
+        # вопрос о понятии, которого нет в словаре, а своими словами без ИИ бот не понимает
+        respond_kb = keyboards.back()
+        await respond(texts.explain_unknown(glossary.popular()), reply_markup=respond_kb)
         return
     if user_id in svc.busy:
         await respond(texts.BUSY)

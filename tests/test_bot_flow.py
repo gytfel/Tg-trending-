@@ -947,6 +947,72 @@ async def test_screener_in_group_replies(screener_env):
     assert last.chat_id == GROUP.id and last.reply_parameters is not None and "Скринер · рост" in last.text
 
 
+# --- вопросы без монеты: словарь и ИИ ----------------------------------------------------------------
+
+
+class TeacherHub(AIHub):
+    """ИИ, который объясняет термины: запоминает промпт, отвечает одной фразой."""
+
+    def __init__(self):
+        super().__init__({"ANTHROPIC_API_KEY": "k"})
+        self.prompts: list[str] = []
+
+    async def complete(self, ref, system, prompt, **kw):
+        self.prompts.append(prompt)
+        return "Сквиз лонгов — каскад ликвидаций: **фандинг** перегрет, лонги вылетают один за другим."
+
+    async def stream(self, ref, system, prompt, **kw):
+        yield await self.complete(ref, system, prompt, **kw)
+
+
+async def test_glossary_without_ai(env):
+    session, feed, svc = env
+    await feed(msg("что такое сквиз лонгов"))
+    last = session.last()
+    assert "📖 <b>Сквиз лонгов (лонг-сквиз)</b>" in last.text and "каскад" in last.text
+    assert "▶️ перегрев BTC" in session.buttons() and "🧠 Подробнее с ИИ" not in session.buttons()  # ключа ИИ нет
+    assert (await svc.quota.status(UID)).used == 0  # словарь бесплатный
+    await feed(msg("что за MVRV"))  # MVRV парсер считает тикером, но это термин
+    assert "📖 <b>MVRV</b>" in session.last().text
+    await feed(msg("в чём разница между RSI и MACD"))
+    assert "📖 <b>RSI" in session.last().text and "📖 <b>MACD</b>" in session.last().text
+    await feed(msg("сквиз шортов?"))
+    assert "📖 <b>Сквиз шортов" in session.last().text
+
+
+async def test_unknown_term_without_ai_explains_limits(env):
+    session, feed, svc = env
+    await feed(msg("что такое гамма-экспозиция опционов"))
+    text = session.last().text
+    assert "нет в моём словаре" in text and "Сквиз лонгов" in text and (await svc.quota.status(UID)).used == 0
+
+
+async def test_term_with_coin_is_analysis(env):
+    session, feed, svc = env
+    await feed(msg("что такое фандинг BTC"))  # монета названа — это разбор, а не словарь
+    assert "✱ <b>Bitcoin</b>" in session.last().text and (await svc.quota.status(UID)).used == 1
+
+
+async def test_ai_explains_deeper_and_unknown_terms(registry, dispatcher):
+    hub = TeacherHub()
+    session, feed, svc = await make_env(registry, dispatcher, hub=hub, report_style="text")
+    try:
+        await feed(msg("что такое сквиз лонгов"))
+        assert "📖 <b>Сквиз лонгов" in session.last().text and not hub.prompts  # сначала словарь, без ИИ
+        await feed(cb(session.button_data("🧠 Подробнее с ИИ")))
+        answer = session.last().text
+        assert "🤖 <b>Вывод</b>\nСквиз лонгов — каскад ликвидаций: <b>фандинг</b> перегрет" in answer
+        assert "Bitcoin" not in answer.split("🤖")[0]  # не обзор монеты и не карточка
+        prompt = hub.prompts[-1]
+        assert "Объясни подробнее" in prompt and "Справка бота" in prompt and "вопрос о понятии" in prompt
+        assert (await svc.quota.status(UID)).used == 1  # ответ ИИ тратит запас, как обычный разбор
+
+        await feed(msg("объясни, что такое гамма-экспозиция опционов"))  # нет в словаре — сразу ИИ
+        assert "🤖 <b>Вывод</b>" in session.last().text and "Справка бота" not in hub.prompts[-1]
+    finally:
+        await svc.db.close()
+
+
 # --- /channels: новостные Telegram-каналы ---------------------------------------------------------
 
 TG_OK = """<meta property="og:title" content="Wu Blockchain">

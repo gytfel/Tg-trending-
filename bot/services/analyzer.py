@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import json
 import logging
@@ -15,7 +16,7 @@ from bot.db import Skill
 from bot.formatting import esc, short_addr
 from bot.query_parser import ParsedQuery
 from bot.render import Card
-from bot.services import cards, prose, report, skills_builtin, swarm, ta
+from bot.services import cards, glossary, prose, report, skills_builtin, swarm, ta
 from bot.services.llm import LLM, to_html
 from bot.services.progress import Progress
 from bot.services.swarm import Swarm
@@ -27,6 +28,13 @@ from bot.sources.registry import Registry
 from bot.sources.resolver import resolve_contract, resolve_symbol
 
 log = logging.getLogger(__name__)
+
+EXPLAIN_NOTE = (
+    "Это вопрос о понятии или механике рынка, а не о конкретной монете. Объясни своими знаниями простыми "
+    "словами: что это, почему возникает, короткий пример с цифрами, как трейдеру это использовать и чем "
+    "опасно. Цифры о текущем рынке бери только из данных — одной-двумя фразами свяжи объяснение с рынком "
+    "сейчас, если в данных есть что-то по теме. До 1000 символов."
+)
 
 
 class LiveSink(Protocol):
@@ -105,7 +113,7 @@ def describe_collected(snaps: list[Snapshot]) -> str:
 
 @dataclass(slots=True)
 class AnalysisResult:
-    kind: str  # asset | compare | contract | overview | nothing
+    kind: str  # asset | compare | contract | overview | question | nothing
     text: str
     symbols: list[str] = field(default_factory=list)  # для статистики «чаще спрашивают»
     snapshots: list[Snapshot] = field(default_factory=list)
@@ -200,6 +208,9 @@ class Analyzer:
         # встроенные навыки (новости, перегрев, риск…) бот считает сам — они работают и без ИИ
         builtins = skills_builtin.find(q.skills, q.raw)
         ai_on = self.llm.enabled or (self.swarm is not None and self.swarm.enabled)
+        # «что такое сквиз лонгов», «объясни фандинг» — вопрос о понятии, а не о монете: отвечает ИИ
+        if not targets and not q.market and not q.skills and self.llm.enabled and glossary.is_explain(q.raw):
+            return await self._explain(q, skills, progress, live, t0)
         # «навык новости» без монеты — про рынок в целом
         overview = not targets and (q.market or bool(builtins) or (ai_on and q.words >= 3))
         if not targets and not overview:
@@ -323,6 +334,39 @@ class Analyzer:
             agents=agents,
             card=card,
             caption=self._caption(kind, found, g, ai_html, agents, ai_skills, list(blocks.values())),
+        )
+
+    async def _explain(
+        self, q: ParsedQuery, skills: list[Skill], progress: Progress, live: LiveSink | None, t0: float
+    ) -> AnalysisResult:
+        """Вопрос без монеты: ИИ объясняет понятие и одной-двумя фразами связывает с рынком сейчас.
+
+        Данные — только общий фон (страх и жадность, капитализация, доминация, фандинг BTC): полный
+        обзор с новостями здесь не нужен. Справка из словаря уходит модели как опора.
+        """
+        await progress.step("📖", "Вопрос без монеты — объясню и сверю с рынком")
+        (g,) = await self._collect_all([(self.registry.for_global(), None)], progress)
+        terms = glossary.find(q.raw)
+        note = EXPLAIN_NOTE
+        if terms:
+            note += "\n\nСправка бота (опора, не противоречь ей):\n" + "\n".join(f"{t.title}: {t.text}" for t in terms)
+        asked = dataclasses.replace(q, raw=f"{q.raw}\n\n({note})")
+        verdict, used, agents, ai_html = await self._verdict(
+            asked, [], g, skills, progress, live=live, card=None, prefix=[], use_swarm=False
+        )
+        if not used:  # ИИ не ответил — хотя бы справка из словаря
+            verdict = glossary.render(terms) if terms else "🤖 ИИ сейчас не ответил — попробуй ещё раз через минуту."
+        elapsed = time.monotonic() - t0
+        return AnalysisResult(
+            kind="question",
+            text="\n\n".join(p for p in (verdict, report.footer(g.ok_count(), g.asked, elapsed)) if p),
+            background=g,
+            asked=g.asked,
+            ok=g.ok_count(),
+            elapsed=elapsed,
+            used_llm=used,
+            agents=agents,
+            caption=ai_html or "",
         )
 
     async def _ta(self, found: list[Snapshot], tf: str = ta.DEFAULT_TF) -> dict[str, ta.TA]:
