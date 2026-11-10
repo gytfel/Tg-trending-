@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     bot_token: str
     bot_name: str = "Trending"
     brand_icon: str = "✾"  # знак перед названием в меню (ближайший к логотипу символ)
+    brand_emoji_id: str = ""  # свой эмодзи-логотип из эмодзи-пака (номер даст /emoji); нужен username с Fragment
+    brand_emoji_alt: str = "✨"  # обычный эмодзи, к которому привязан свой (виден, где свой не отображается)
     admin_ids: str = ""  # через запятую: безлимит и /sources с проверкой
     support_url: str = ""  # кнопка «💬 Поддержка» в помощи, например https://t.me/your_support
     rules_url: str = ""  # ссылка «Правила использования» в помощи

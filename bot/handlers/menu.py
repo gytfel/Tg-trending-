@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+import re
+
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -17,12 +21,27 @@ from bot.services import Services, health_report
 from bot.sources.base import Category
 
 router = Router(name="menu")
+log = logging.getLogger(__name__)
+
+# Свои эмодзи в сообщениях бота Telegram разрешает только ботам с купленным именем на Fragment.
+# Если откажет — запоминаем и дальше показываем обычный знак BRAND_ICON.
+_custom_emoji = {"ok": True}
 
 
-async def render_menu(svc: Services, user_id: int) -> str:
+def reset_custom_emoji() -> None:  # для тестов
+    _custom_emoji["ok"] = True
+
+
+def brand_icon(svc: Services, *, allow_emoji: bool = True) -> str:
+    s = svc.settings
+    use = allow_emoji and _custom_emoji["ok"] and s.brand_emoji_id.strip().isdigit()
+    return texts.brand(s.brand_icon, s.brand_emoji_id.strip() if use else "", s.brand_emoji_alt)
+
+
+async def render_menu(svc: Services, user_id: int, *, allow_emoji: bool = True) -> str:
     quota = await svc.quota.status(user_id)
     watches = await svc.db.count_watches(user_id)
-    return texts.main_menu(svc.settings.bot_name, quota, watches, svc.settings.brand_icon)
+    return texts.main_menu(svc.settings.bot_name, quota, watches, brand_icon(svc, allow_emoji=allow_emoji))
 
 
 def is_group(event: Message | CallbackQuery) -> bool:
@@ -32,15 +51,22 @@ def is_group(event: Message | CallbackQuery) -> bool:
 
 async def show_menu(event: Message | CallbackQuery, bot: Bot, svc: Services) -> None:
     """В личке — полное меню с запасом и слежками, в группе — общее без личных данных."""
-    if is_group(event):
-        username = (await bot.me()).username
-        await show(
-            event,
-            texts.group_menu(svc.settings.bot_name, username, svc.settings.brand_icon),
-            keyboards.group_menu(username),
-        )
-    else:
-        await show(event, await render_menu(svc, event.from_user.id), keyboards.main_menu())
+    username = (await bot.me()).username if is_group(event) else None
+
+    async def render(allow_emoji: bool) -> str:
+        if is_group(event):
+            return texts.group_menu(svc.settings.bot_name, username, brand_icon(svc, allow_emoji=allow_emoji))
+        return await render_menu(svc, event.from_user.id, allow_emoji=allow_emoji)
+
+    kb = keyboards.group_menu(username) if is_group(event) else keyboards.main_menu()
+    try:
+        await show(event, await render(True), kb)
+    except TelegramBadRequest as e:
+        if "tg-emoji" not in await render(True):
+            raise
+        log.warning("свой эмодзи в меню не принят (%s) — показываю знак %s", e, svc.settings.brand_icon)
+        _custom_emoji["ok"] = False
+        await show(event, await render(False), kb)
 
 
 @router.message(CommandStart())
@@ -156,3 +182,60 @@ async def admin_health(message: Message, svc: Services) -> None:
     if message.from_user.id not in svc.settings.admins or svc.health is None:
         return
     await message.answer(health_report.render(svc.health, svc.registry, svc.settings.timezone))
+
+
+# --- ✨ свой эмодзи-логотип: номер по имени пака, стикеру или сообщению с эмодзи ---------------------
+
+PACK_RE = re.compile(r"(?:t\.me/(?:addemoji|addstickers)/)?([A-Za-z0-9_]{1,64})")
+
+
+def _admin_private(message: Message, svc: Services) -> bool:
+    return message.from_user is not None and message.from_user.id in svc.settings.admins and not is_group(message)
+
+
+@router.message(Command("emoji"))
+async def admin_emoji(message: Message, command: CommandObject, bot: Bot, svc: Services) -> None:
+    if not _admin_private(message, svc):
+        return
+    m = PACK_RE.search((command.args or "").strip())
+    if not m:
+        await message.answer(texts.EMOJI_HELP)
+        return
+    try:
+        pack = await bot.get_sticker_set(name=m.group(1))
+    except TelegramBadRequest:
+        await message.answer(texts.emoji_not_found(m.group(1)))
+        return
+    items = [(s.emoji or "", s.custom_emoji_id) for s in pack.stickers if s.custom_emoji_id]
+    if pack.sticker_type != "custom_emoji" or not items:
+        await message.answer(texts.emoji_wrong_pack(pack.title))
+        return
+    await message.answer(texts.emoji_ids(pack.title, items))
+
+
+async def _has_custom_emoji(message: Message, svc: Services) -> bool:
+    return _admin_private(message, svc) and any(e.type == "custom_emoji" for e in (message.entities or []))
+
+
+@router.message(_has_custom_emoji)
+async def admin_custom_emoji(message: Message) -> None:
+    """Админ прислал сообщение со своим эмодзи — отвечаем его номером."""
+    items = [
+        ((message.text or "")[e.offset : e.offset + e.length], e.custom_emoji_id)
+        for e in message.entities or []
+        if e.type == "custom_emoji" and e.custom_emoji_id
+    ]
+    await message.answer(texts.emoji_ids("из сообщения", items))
+
+
+async def _admin_sticker(message: Message, svc: Services) -> bool:
+    return message.sticker is not None and _admin_private(message, svc)
+
+
+@router.message(_admin_sticker)
+async def admin_sticker(message: Message) -> None:
+    st = message.sticker
+    if st.custom_emoji_id:
+        await message.answer(texts.emoji_ids(st.set_name or "стикер", [(st.emoji or "", st.custom_emoji_id)]))
+    else:
+        await message.answer(texts.sticker_is_regular(st.set_name))

@@ -13,14 +13,22 @@ SKILL_NAME_MAX = 40
 SKILL_BODY_MAX = 2000
 
 
+def brand(icon: str = BRAND, emoji_id: str = "", emoji_alt: str = "") -> str:
+    """Знак перед названием: свой эмодзи из пака (если задан BRAND_EMOJI_ID) или символ BRAND_ICON."""
+    if emoji_id.isdigit():
+        return f'<tg-emoji emoji-id="{emoji_id}">{esc(emoji_alt or "✨")}</tg-emoji>'
+    return esc(icon)
+
+
 def main_menu(bot_name: str, quota: QuotaStatus, watches: int, icon: str = BRAND) -> str:
+    """icon — уже готовый HTML знака (см. brand)."""
     if watches:
         w = f"{watches} {plural(watches, 'активная', 'активные', 'активных')}"
     else:
         w = "пока нет"
     q = "безлимит" if quota.unlimited else f"{progress_bar(quota.pct)} {quota.pct}%"
     return (
-        f"{esc(icon)} <b>{esc(bot_name)}</b> · ИИ-аналитик\n\n"
+        f"{icon} <b>{esc(bot_name)}</b> · ИИ-аналитик\n\n"
         f"Запас на сегодня {q}\n"
         f"Слежки — {w}\n\n"
         "Напиши тикер или вопрос — начну разбор."
@@ -31,7 +39,7 @@ def group_menu(bot_name: str, bot_username: str | None, icon: str = BRAND) -> st
     """Меню в группе: без личного запаса и слежек — они открываются в личке."""
     ask = f"<code>@{esc(bot_username)} BTC</code> или " if bot_username else ""
     return (
-        f"{esc(icon)} <b>{esc(bot_name)}</b> · ИИ-аналитик\n\n"
+        f"{icon} <b>{esc(bot_name)}</b> · ИИ-аналитик\n\n"
         f"Спроси меня прямо здесь: {ask}<code>/ask BTC</code>\n"
         "Навыки, слежки и профиль — в личке, чтобы не светить их в общем чате."
     )
@@ -326,6 +334,47 @@ GROUP_HINT = "Спроси меня так: <code>@{bot} BTC</code> или <code
 
 ADMIN_ONLY = "Этот раздел — только для админа бота."
 ERROR = "😵 Что-то пошло не так при разборе. Попробуй ещё раз через минуту — запас не списан."
+
+EMOJI_HELP = (
+    "✨ <b>Свой эмодзи в меню</b>\n\n"
+    "Пришли имя эмодзи-пака или ссылку на него: <code>/emoji gyvex_logo</code> или "
+    "<code>/emoji t.me/addemoji/gyvex_logo</code> — найду номер эмодзи.\n"
+    "Или просто пришли сюда стикер или сообщение с этим эмодзи."
+)
+
+
+def emoji_ids(title: str, items: list[tuple[str, str]]) -> str:
+    rows = "\n".join(f"{esc(alt)} — <code>{esc(eid)}</code>" for alt, eid in items)
+    eid, alt = items[0][1], items[0][0] or "✨"
+    return (
+        f"✨ Пак «<b>{esc(title)}</b>»:\n{rows}\n\n"
+        "Чтобы эмодзи стоял в меню перед названием, впиши в настройки (<code>tg-trending config</code>):\n"
+        f"<code>BRAND_EMOJI_ID={esc(eid)}</code>\n<code>BRAND_EMOJI_ALT={esc(alt)}</code>\n\n"
+        "<i>Telegram показывает свои эмодзи в сообщениях бота, только если у бота есть купленное имя на "
+        "Fragment. Без него в меню останется обычный знак — бот переключится сам.</i>"
+    )
+
+
+def emoji_not_found(name: str) -> str:
+    return f"Не нашёл пак «{esc(name)}». Проверь имя — это часть ссылки после <code>t.me/addemoji/</code>."
+
+
+def emoji_wrong_pack(title: str) -> str:
+    return (
+        f"«{esc(title)}» — это обычный стикерпак, а в текст сообщения встают только эмодзи из "
+        "<b>эмодзи-пака</b>. Создай его в @Stickers командой /newemojipack с тем же PNG, затем пришли "
+        "<code>/emoji имя_пака</code>."
+    )
+
+
+def sticker_is_regular(set_name: str | None) -> str:
+    where = f" из пака «{esc(set_name)}»" if set_name else ""
+    return (
+        f"Это обычный стикер{where}. Стикеры нельзя вставить в текст — для меню нужен эмодзи из "
+        "<b>эмодзи-пака</b>: @Stickers → /newemojipack. Если эмодзи-пак уже есть — пришли "
+        "<code>/emoji имя_пака</code>."
+    )
+
 
 CHART_NO_AI = (
     "📷 Скриншоты графиков разбирает ИИ — нужен ключ модели, которая видит картинки "

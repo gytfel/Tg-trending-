@@ -19,11 +19,24 @@ from aiogram.methods import (
     EditMessageText,
     GetFile,
     GetMe,
+    GetStickerSet,
     SendMessage,
     SendMessageDraft,
     SendPhoto,
 )
-from aiogram.types import CallbackQuery, Chat, Document, File, Message, MessageEntity, PhotoSize, Update, User
+from aiogram.types import (
+    CallbackQuery,
+    Chat,
+    Document,
+    File,
+    Message,
+    MessageEntity,
+    PhotoSize,
+    Sticker,
+    StickerSet,
+    Update,
+    User,
+)
 
 from bot.ai import AIHub
 from bot.app import build_dispatcher
@@ -51,11 +64,20 @@ class FakeSession(BaseSession):
         super().__init__()
         self.requests: list = []
         self.drafts_supported = True  # False — как сервер Telegram без sendMessageDraft
+        self.custom_emoji_allowed = True  # False — бот без имени на Fragment: свои эмодзи нельзя
+        self.sticker_sets: dict[str, StickerSet] = {}
 
     async def make_request(self, bot, method, timeout=None):
         self.requests.append(method)
         if isinstance(method, SendMessageDraft) and not self.drafts_supported:
             raise TelegramBadRequest(method, "Bad Request: method not found")
+        text = getattr(method, "text", None) or ""
+        if not self.custom_emoji_allowed and "<tg-emoji" in text:
+            raise TelegramBadRequest(method, "Bad Request: can't use custom emoji")
+        if isinstance(method, GetStickerSet):
+            if method.name not in self.sticker_sets:
+                raise TelegramBadRequest(method, "Bad Request: STICKERSET_INVALID")
+            return self.sticker_sets[method.name]
         if isinstance(method, (SendMessage, EditMessageText)):
             chat_id = method.chat_id or UID
             return Message(
@@ -211,6 +233,9 @@ async def make_env(registry, dispatcher, hub=None, **overrides):
     overrides.setdefault("stream_answers", False)  # печать проверяем отдельными тестами
     overrides.setdefault("stream_drafts", False)  # правками — как в группах; черновики — своими тестами
     tg_draft.reset_support()
+    from bot.handlers import menu as menu_handlers
+
+    menu_handlers.reset_custom_emoji()
     settings = Settings(bot_token="1:TEST", bot_name="Trending", database_path=":memory:", daily_limit=4, **overrides)
     db = Database(":memory:")
     await db.connect()
@@ -1169,3 +1194,104 @@ async def test_volatility_skill(env):
     await feed(msg("волатильность BTC"))
     text = session.last().text
     assert "🌪 <b>Волатильность · BTC · 4ч</b>" in text and "Обычный ход: за сутки" in text
+
+
+# --- свой эмодзи-логотип в меню ----------------------------------------------------------------
+
+EMOJI_ID = "5368324170671202286"
+
+
+def emoji_sticker(custom: bool = True) -> Sticker:
+    return Sticker(
+        file_id="s1",
+        file_unique_id="su1",
+        type="custom_emoji" if custom else "regular",
+        width=100,
+        height=100,
+        is_animated=False,
+        is_video=False,
+        emoji="✨",
+        custom_emoji_id=EMOJI_ID if custom else None,
+        set_name="gyvex_logo" if custom else "gyvex_stickers",
+    )
+
+
+async def test_menu_shows_custom_emoji(registry, dispatcher):
+    session, feed, svc = await make_env(registry, dispatcher, brand_emoji_id=EMOJI_ID, brand_emoji_alt="✨")
+    try:
+        await feed(msg("/start"))
+        assert f'<tg-emoji emoji-id="{EMOJI_ID}">✨</tg-emoji> <b>Trending</b>' in session.last().text
+    finally:
+        await svc.db.close()
+
+
+async def test_menu_falls_back_when_custom_emoji_refused(registry, dispatcher):
+    session, feed, svc = await make_env(registry, dispatcher, brand_emoji_id=EMOJI_ID)
+    session.custom_emoji_allowed = False  # у бота нет имени на Fragment
+    try:
+        await feed(msg("/start"))
+        assert session.last().text.startswith("✾ <b>Trending</b>")  # меню всё равно пришло — со знаком
+        tries = sum(1 for r in session.requests if "<tg-emoji" in (getattr(r, "text", None) or ""))
+        await feed(msg("/start"))
+        assert (
+            sum(1 for r in session.requests if "<tg-emoji" in (getattr(r, "text", None) or "")) == tries
+        )  # больше не пробует
+    finally:
+        await svc.db.close()
+
+
+async def test_emoji_command_finds_id(registry, dispatcher):
+    session, feed, svc = await make_env(registry, dispatcher, admin_ids=str(UID))
+    session.sticker_sets["gyvex_logo"] = StickerSet(
+        name="gyvex_logo", title="GYVEX", sticker_type="custom_emoji", stickers=[emoji_sticker()]
+    )
+    session.sticker_sets["gyvex_stickers"] = StickerSet(
+        name="gyvex_stickers", title="GYVEX stickers", sticker_type="regular", stickers=[emoji_sticker(False)]
+    )
+    try:
+        await feed(msg("/emoji t.me/addemoji/gyvex_logo"))
+        text = session.last().text
+        assert f"<code>BRAND_EMOJI_ID={EMOJI_ID}</code>" in text and "<code>BRAND_EMOJI_ALT=✨</code>" in text
+        await feed(msg("/emoji gyvex_stickers"))
+        assert "обычный стикерпак" in session.last().text and "/newemojipack" in session.last().text
+        await feed(msg("/emoji nope"))
+        assert "Не нашёл пак «nope»" in session.last().text
+        await feed(msg("/emoji"))
+        assert "Свой эмодзи в меню" in session.last().text
+    finally:
+        await svc.db.close()
+
+
+async def test_emoji_id_from_sticker_and_message(registry, dispatcher):
+    session, feed, svc = await make_env(registry, dispatcher, admin_ids=str(UID))
+    try:
+        upd = Update(
+            update_id=next(_ids),
+            message=Message(
+                message_id=next(_ids), date=datetime.now(), chat=CHAT, from_user=USER, sticker=emoji_sticker(False)
+            ),
+        )
+        await feed(upd)
+        assert "Это обычный стикер из пака «gyvex_stickers»" in session.last().text
+        upd = Update(
+            update_id=next(_ids),
+            message=Message(
+                message_id=next(_ids),
+                date=datetime.now(),
+                chat=CHAT,
+                from_user=USER,
+                text="✨",
+                entities=[MessageEntity(type="custom_emoji", offset=0, length=1, custom_emoji_id=EMOJI_ID)],
+            ),
+        )
+        await feed(upd)
+        assert f"BRAND_EMOJI_ID={EMOJI_ID}" in session.last().text
+    finally:
+        await svc.db.close()
+
+
+async def test_emoji_tools_are_admin_only(env):
+    session, feed, _ = env
+    before = len(session.texts())
+    await feed(msg("/emoji gyvex_logo"))
+    assert len(session.texts()) == before

@@ -49,6 +49,7 @@ ADMIN_COMMANDS = [
     BotCommand(command="sources", description="Источники данных (админ)"),
     BotCommand(command="health", description="Здоровье источников (админ)"),
     BotCommand(command="stats", description="Статистика (админ)"),
+    BotCommand(command="emoji", description="Свой эмодзи-логотип для меню (админ)"),
 ]
 
 
