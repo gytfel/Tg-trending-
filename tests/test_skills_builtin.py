@@ -272,3 +272,52 @@ def test_new_ta_skills_found_by_words():
     found = [b.key for b in sb.find([], "есть дивер на SOL и какая волатильность")]
     assert found == ["дивергенции", "волатильность"]
     assert sb.get("дивер").key == "дивергенции" and sb.get("вола").key == "волатильность"
+
+
+# --- 🧠 свод навыков ------------------------------------------------------------------------------
+
+
+def test_votes_and_conflicting_verdict():
+    s = btc(funding=(0.06, 0.06, 0.05, 0.07), ls=(3.6, 3.8))  # лонги перегреты
+    s.results.append(
+        SourceResult(
+            "w",
+            "w",
+            Category.ONCHAIN,
+            metrics=[Metric("whale_to_ex", "", 1e6, "USD"), Metric("whale_from_ex", "", 9e6, "USD")],
+        )
+    )
+    vs = sb.votes({"перегрев", "киты"}, s, None)
+    assert [(v.side, v.text) for v in vs] == [
+        (-1, "лонги перегреты — риск выноса вниз"),
+        (1, "киты выводят монеты с бирж"),
+    ]
+    out = sb.render_synthesis(s, None, vs)
+    assert_tg_html(out)
+    assert "🟢 За рост: киты выводят монеты с бирж." in out and "🔴 Против: лонги перегреты" in out
+    assert "Итог: сигналы уравновешены — ждём подтверждения." in out
+
+
+def test_synthesis_verdicts():
+    s = btc()
+    up = sb.render_synthesis(s, None, [sb.Vote(1, "a"), sb.Vote(1, "b")])
+    assert "Итог: сигналы за рост." in up
+    down = sb.render_synthesis(s, None, [sb.Vote(-1, "a"), sb.Vote(-1, "b"), sb.Vote(1, "c")])
+    assert "перевес против роста" in down
+    calm = sb.render_synthesis(s, None, [sb.Vote(0, "сжатие полос")])
+    assert "⚪ Сжатие полос." in calm and "направления нет" in calm
+    assert "Явных сигналов" in sb.render_synthesis(s, None, [])
+
+
+def test_synthesis_only_for_several_directional_skills():
+    inp = sb.SkillInput("asset", [btc()], G, "")
+    assert sb.synthesis(sb.find(["перегрев", "новости"]), inp) is not None
+    assert sb.synthesis(sb.find(["перегрев"]), inp) is None  # один навык — своду не из чего
+    assert sb.synthesis(sb.find(["риск", "коротко"]), inp) is None  # без направления
+    assert sb.synthesis(sb.find(["перегрев", "новости"]), sb.SkillInput("compare", [btc(), btc()], G)) is None
+    assert sb.synthesis(sb.find(["свод", "перегрев"]), inp) is None  # навык «свод» — сам свод
+
+
+def test_synth_skill_found_by_words():
+    assert [b.key for b in sb.find([], "свод по BTC")] == ["свод"]
+    assert "навык свод" in run("свод", [], kind="overview")

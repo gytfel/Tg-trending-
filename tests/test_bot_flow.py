@@ -1295,3 +1295,20 @@ async def test_emoji_tools_are_admin_only(env):
     before = len(session.texts())
     await feed(msg("/emoji gyvex_logo"))
     assert len(session.texts()) == before
+
+
+async def test_several_skills_get_synthesis_first(card_env):
+    session, feed, svc = card_env
+    with_candles(svc)
+    await feed(msg("тейки и дивергенции по BTC"))  # два навыка с направлением
+    photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+    cap = photo.caption
+    assert "🧠 <b>Свод · BTC</b>" in cap and cap.index("🧠 <b>Свод") < cap.index("🎯 <b>Сетап")
+    assert "🟢 За рост: тренд 4ч/1д вверх" in cap and "Итог:" in cap
+
+
+async def test_synth_skill_on_its_own(env):
+    session, feed, svc = env
+    with_candles(svc)
+    await feed(msg("свод BTC"))
+    assert "🧠 <b>Свод · BTC</b>" in session.last().text and "Итог:" in session.last().text

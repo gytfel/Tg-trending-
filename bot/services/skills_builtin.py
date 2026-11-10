@@ -774,9 +774,150 @@ def render_whales(inp: SkillInput) -> str:
     return _per_coin(inp, "🐋", "Киты", "киты", _whales)
 
 
+# --- 🧠 свод навыков ------------------------------------------------------------------------------
+
+SYNTH_PROMPT = (
+    "Пользователь вызвал несколько навыков. Не пересказывай их по очереди — сведи в один вывод: где расчёты "
+    "согласны, где спорят, что сейчас важнее и почему, и итоговый план одним-двумя предложениями (входить, ждать "
+    "отката или не трогать) с уровнями из расчётов. Цифры бери только из данных бота."
+)
+# навыки, у которых есть направление «за рост / против»; риск, арбитраж и коротко — без направления
+DIRECTIONAL = {"тейки", "теханализ", "дивергенции", "волатильность", "перегрев", "ликвидации", "киты", "новости",
+               "разлоки", "скам-чек"}  # fmt: skip
+ALL_SIGNALS = DIRECTIONAL | {"рынок"}
+
+
+@dataclass(frozen=True, slots=True)
+class Vote:
+    side: int  # +1 за рост, −1 против, 0 — важно, но без направления
+    text: str
+
+
+def votes(keys: set[str], s: Snapshot, t: tech.TA | None, g: Snapshot | None = None) -> list[Vote]:
+    """Что говорит каждый навык: за рост, против или «важно, но без направления»."""
+    out: list[Vote] = []
+    if t is not None and keys & {"тейки", "теханализ"}:
+        d, _ = t.trend()
+        frames = t.base.name + (f"/{t.higher.name}" if t.higher else "")
+        out.append(Vote(d, f"тренд {frames} {'вверх' if d > 0 else 'вниз' if d < 0 else '— боковик'}"))
+    if t is not None and "дивергенции" in keys:
+        for d in t.divs:
+            if d.regular:
+                out.append(Vote(-1 if d.bearish else 1, f"{tech.DIV_KINDS[d.kind][1]} дивергенция на {d.frame}"))
+    if "перегрев" in keys and (hs := heat_score(s)) is not None:
+        if hs >= 2:
+            out.append(Vote(-1, "лонги перегреты — риск выноса вниз"))
+        elif hs <= -2:
+            out.append(Vote(1, "шорты перегреты — возможен шорт-сквиз"))
+    if "ликвидации" in keys:
+        longs = _num(s.metric("liq_long_24h")) or _num(s.metric("okx_liq_long"))
+        shorts = _num(s.metric("liq_short_24h")) or _num(s.metric("okx_liq_short"))
+        if longs and longs >= (shorts or 0) * 2:
+            out.append(Vote(1, "вынесли лонги — после чистки часто отскок"))
+        elif shorts and shorts >= (longs or 0) * 2:
+            out.append(Vote(-1, "шорт-сквиз — рост на ликвидациях выдыхается"))
+    if "киты" in keys:
+        to_ex, from_ex = _num(s.metric("whale_to_ex")), _num(s.metric("whale_from_ex"))
+        if to_ex and to_ex >= (from_ex or 0) * 2:
+            out.append(Vote(-1, "киты несут монеты на биржи"))
+        elif from_ex and from_ex >= (to_ex or 0) * 2:
+            out.append(Vote(1, "киты выводят монеты с бирж"))
+    if "новости" in keys and (items := s.news(5)):
+        tones = [tone(n.title) for n in items]
+        if tones.count(1) >= tones.count(-1) + 2:
+            out.append(Vote(1, "новости позитивные"))
+        elif tones.count(-1) >= tones.count(1) + 2:
+            out.append(Vote(-1, "новости негативные"))
+    if "разлоки" in keys:
+        month, m = _num(s.metric("unlock_30d_usd")), s.best_market()
+        if month and m and m.market_cap and month / m.market_cap * 100 >= 2:
+            out.append(Vote(-1, f"разлоки за месяц — {month / m.market_cap * 100:.1f}% капы"))
+    if "скам-чек" in keys and s.security() and merge_security(s.security())[0] == "high":
+        out.append(Vote(-1, "высокий риск по контракту"))
+    if t is not None and "волатильность" in keys and (v := tech.volatility(t)) and v.width_rank <= tech.SQUEEZE:
+        out.append(Vote(0, "сжатие полос — скоро сильное движение, направление покажет выход из диапазона"))
+    if "рынок" in keys and g is not None and (fg := _num(g.metric("fear_greed"))) is not None:
+        if fg <= 25:
+            out.append(Vote(1, f"на рынке страх ({fg:.0f}) — исторически время искать входы"))
+        elif fg >= 75:
+            out.append(Vote(-1, f"на рынке жадность ({fg:.0f}) — осторожно с покупками на хаях"))
+    return out
+
+
+def render_synthesis(s: Snapshot, t: tech.TA | None, vs: list[Vote]) -> str:
+    head = _title("🧠", "Свод", s)
+    if not vs:
+        return head + "\nЯвных сигналов ни за рост, ни против нет — рынок по монете спокоен."
+    ups, downs, calm = [v for v in vs if v.side > 0], [v for v in vs if v.side < 0], [v for v in vs if v.side == 0]
+    lines = [head]
+    if ups:
+        lines.append("🟢 За рост: " + "; ".join(esc(v.text) for v in ups) + ".")
+    if downs:
+        lines.append("🔴 Против: " + "; ".join(esc(v.text) for v in downs) + ".")
+    for v in calm:
+        lines.append(f"⚪ {esc(v.text[:1].upper() + v.text[1:])}.")
+    sup = fmt_price(t.supports[0].price) if t is not None and t.supports else None
+    res = fmt_price(t.resists[0].price) if t is not None and t.resists else None
+    score = len(ups) - len(downs)
+    if ups and downs:
+        if score > 0:
+            verdict = "перевес за рост, но есть возражения — вход лучше на откате" + (f" к {sup}" if sup else "")
+        elif score < 0:
+            verdict = "перевес против роста — с покупками лучше подождать" + (f", сопротивление {res}" if res else "")
+        else:
+            verdict = "сигналы уравновешены — ждём подтверждения" + (
+                f": пробой {res} или уход под {sup}" if sup and res else ""
+            )
+    elif ups:
+        verdict = "сигналы за рост" + (f", ближайшая цель — {res}" if res else "")
+    elif downs:
+        verdict = "сигналы против роста — покупать рано" + (f", поддержка {sup}" if sup else "")
+    else:
+        verdict = "направления нет — ждём выхода из диапазона"
+    lines.append("Итог: " + verdict + ".")
+    return "\n".join(lines)
+
+
+def _ta_of(inp: SkillInput, s: Snapshot) -> tech.TA | None:
+    a = s.asset
+    return inp.ta.get((a.symbol or "").upper()) if a and a.symbol and not a.contract else None
+
+
+def synthesis(builtins: list[BuiltinSkill], inp: SkillInput) -> str | None:
+    """Свод, если вызвано хотя бы два навыка с направлением (и не навык «свод» — он сам свод)."""
+    keys = {b.key for b in builtins}
+    used = keys & DIRECTIONAL
+    if "свод" in keys or len(used) < 2 or len(inp.snaps) != 1:
+        return None
+    s = inp.snaps[0]
+    t = _ta_of(inp, s)
+    return render_synthesis(s, t, votes(used, s, t, inp.g))
+
+
+def render_synth_skill(inp: SkillInput) -> str:
+    """Навык «свод»: общая картина по всем данным — тренд, дивергенции, перегрев, ликвидации, киты…"""
+    if not inp.snaps:
+        return _need_coin("🧠", "Свод", "свод")
+    return "\n\n".join(
+        render_synthesis(s, _ta_of(inp, s), votes(ALL_SIGNALS, s, _ta_of(inp, s), inp.g)) for s in inp.snaps
+    )
+
+
 # --- реестр ------------------------------------------------------------------------------------
 
 ALL: tuple[BuiltinSkill, ...] = (
+    BuiltinSkill(
+        "свод",
+        "🧠",
+        "общая картина: все сигналы за и против роста и итог с уровнями",
+        "Сведи все данные бота в общую картину: какие сигналы за рост, какие против, что сейчас важнее и почему, "
+        "и итоговый план одним-двумя предложениями (входить, ждать отката или не трогать) с уровнями из расчётов. "
+        "Цифры бери только из данных бота.",
+        render_synth_skill,
+        ("итог", "картина", "общая картина"),
+        needs_ta=True,
+        words=re.compile(r"(?i)(?<!\w)(свод|общ\w* картин\w*|за и против)(?!\w)"),
+    ),
     BuiltinSkill(
         "тейки",
         "🎯",

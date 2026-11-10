@@ -280,9 +280,16 @@ class Analyzer:
         card = cards.build_card(kind, found, g)
         # «тейки 1ч», «теханализ дневка» — рабочий таймфрейм из вопроса, по умолчанию 4ч
         tas = await self._ta(found, ta.timeframe_from(q.raw)) if any(b.needs_ta for b in builtins) else {}
-        blocks = skills_builtin.run(builtins, skills_builtin.SkillInput(kind, found, g, skill_text, tas))
-        sections.extend(blocks.values())
+        inp = skills_builtin.SkillInput(kind, found, g, skill_text, tas)
+        blocks = skills_builtin.run(builtins, inp)
         ai_skills = skills_builtin.for_ai(skills, builtins, blocks)
+        # несколько навыков сразу — свод «за и против»: в подписи он первый, а ИИ пишет по нему общий вывод
+        if syn := skills_builtin.synthesis(builtins, inp):
+            blocks = {"свод": syn, **blocks}
+            ai_skills.append(
+                Skill(0, 0, "свод", f"{skills_builtin.SYNTH_PROMPT}\n\nСвод бота:\n{skills_builtin.plain(syn)}", "")
+            )
+        sections.extend(blocks.values())
         verdict, used, agents, ai_html = await self._verdict(
             q,
             found,

@@ -249,3 +249,16 @@ async def test_ai_cache_off_and_failed_answers_not_cached(registry):
     await an.analyze(parse_query("BTC"), [])
     await an.analyze(parse_query("BTC"), [])
     assert bad.calls == 2  # неудачный ответ не запоминаем
+
+
+async def test_synthesis_goes_to_ai(registry):
+    from bot.services import skills_builtin
+
+    reg = small_registry(registry, ["binance", "coingecko"])
+    llm = StubLLM()
+    q = parse_query("BTC навык перегрев навык новости", skills_builtin.names())
+    res = await Analyzer(btc_http(), reg, llm, deadline=3).analyze(q, [])
+    _, _, skills = llm.seen
+    synth = [s for s in skills if s.name == "свод"]
+    assert synth and synth[0].content.startswith("Пользователь вызвал несколько навыков")
+    assert "Свод бота:" in synth[0].content and "🧠 <b>Свод · BTC</b>" in res.text

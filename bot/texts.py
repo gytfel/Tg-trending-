@@ -240,7 +240,7 @@ HELP_EXAMPLES = (
     "<code>разбери $HYPE</code>\n"
     "<code>что с фандингом и OI по BTC</code>\n"
     "<code>тейки по BTC</code> · <code>тейки SOL 1ч</code> · <code>теханализ ETH дневка</code>\n"
-    "<code>есть дивер на BTC?</code> · <code>волатильность ETH</code>\n"
+    "<code>есть дивер на BTC?</code> · <code>волатильность ETH</code> · <code>свод BTC</code>\n"
     "📷 скриншот графика с подписью <code>SOL 4ч</code>\n"
     "<code>сравни ARB и OP</code>\n"
     "<code>разбери BTC подробно</code> — рой ИИ-агентов\n"
