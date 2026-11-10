@@ -1,7 +1,7 @@
 # Tg-trending — Telegram-бот «ИИ-аналитик» для крипторынка
 
 Бот разбирает монету по тикеру, адресу контракта или вопросу своими словами.
-Он параллельно опрашивает **160+ источников без ключей** (всего в каталоге 260),
+Он параллельно опрашивает **160+ источников без ключей** (всего в каталоге 261),
 собирает отчёт и даёт вывод через Claude. Ещё в боте есть слежки за ценой и
 «навыки»: 14 встроенных (в том числе теханализ, тейки, дивергенции, волатильность, ликвидации, разлоки, киты и свод), которые работают даже без ключа ИИ, и свои — сохранённые
 правила и шаблоны ответа.
@@ -33,7 +33,7 @@
 | 🧠 **Навыки** | Встроенные (бот считает сам, без ключа ИИ): 🧠 свод, 🎯 тейки, 📐 теханализ, 〽️ дивергенции, 🌪 волатильность, 💥 ликвидации, 🔓 разлоки, 🐋 киты, 📰 новости, 🌡 перегрев, ⚖️ риск, 💱 арбитраж, ⚡ коротко, 🛡 скам-чек. Свои — правила или шаблон («тейки», «мой стиль») для промпта ИИ. Вызов: «разбери BTC навык перегрев» или «#перегрев» |
 | 👤 **Профиль** | Запас на сегодня, число разборов, навыков и слежек |
 | ❓ **Помощь** | Справка: что умеет бот, примеры, лимиты |
-| 🔒 **Для админа** (`ADMIN_IDS`, только в личке) | `/sources` — каталог источников по категориям (кнопка «🔌 Источники данных» в помощи видна только админу), `/health` — здоровье источников, `/stats` — статистика. Эти команды видны в меню команд только админу |
+| 🔒 **Для админа** (`ADMIN_IDS`, только в личке) | `/sources` — каталог источников по категориям (кнопка «🔌 Источники данных» в помощи видна только админу), `/health` — здоровье источников, `/stats` — статистика, `/channels` — новостные Telegram-каналы (добавить, убрать, проверить). Эти команды видны в меню команд только админу |
 | ✨ **Свой эмодзи-логотип** | Знак перед названием в меню — `BRAND_ICON` (по умолчанию ✾). Свой эмодзи из эмодзи-пака: админ пишет боту `/emoji имя_пака` (или присылает стикер / сообщение с эмодзи) — бот отвечает строками `BRAND_EMOJI_ID=…` и `BRAND_EMOJI_ALT=…` для `.env`. Telegram показывает свои эмодзи в сообщениях бота, только если у бота есть купленное имя на Fragment; если откажет — меню само вернётся к `BRAND_ICON` |
 
 Под отчётом есть кнопки «🔔 Следить», «📰 Новости», «🔄 Обновить» и «📋 Подробно». Админу в личке
@@ -149,9 +149,31 @@ CoinDesk, The Block, Decrypt — 3 источника · 40 мин назад
 сводка по всем новым и снятым парам.
 
 **Telegram-каналы.** Публичные каналы бот читает через веб-превью `t.me/s/<канал>` — без
-аккаунта и ключа; заголовок — первая строка поста. Список — `NEWS_TG_CHANNELS` в `.env` через
-запятую (до 15), по умолчанию: binance_announcements, wublockchainenglish, cointelegraph,
-WatcherGuru, forklog, incrypted.
+аккаунта и ключа; заголовок — первая строка поста. Базовый список — `NEWS_TG_CHANNELS` в `.env`
+через запятую, по умолчанию: binance_announcements, wublockchainenglish, cointelegraph,
+WatcherGuru, forklog, incrypted. Админ правит список прямо в боте, до 40 каналов:
+
+```
+/channels                         — список: название, подписчики, когда был последний пост
+/channels add @lookonchain t.me/… — добавить (несколько через пробел)
+/channels del @forklog            — убрать (или кнопкой 🗑 под списком)
+```
+
+Перед добавлением бот открывает канал и добавляет его, только если там есть публичные посты; в
+ответе — название и число подписчиков, чтобы не перепутать с поддельным каналом. Правки хранятся
+в базе поверх списка из `.env`.
+
+**X (Twitter).** Бесплатного чтения у X нет, поэтому только по ключу — хватит одного:
+- `X_BEARER_TOKEN` — официальный X API (платный; бот берёт 10 постов на запрос и держит кеш
+  30 минут на монету, чтобы не съесть лимит чтения);
+- `TWITTERAPI_IO_KEY` — сторонний сервис twitterapi.io с оплатой за объём (дешевле, но это не
+  официальный API X).
+
+Бот читает не всю ленту, а новостные аккаунты — `NEWS_X_ACCOUNTS` через запятую; по умолчанию
+WatcherGuru, tier10k, WuBlockchain, CoinDesk, Cointelegraph, TheBlock__, DeItaone, lookonchain,
+PeckShieldAlert, zachxbt, binance, coinbase, Bybit_Official, okx, krakenfx, BitcoinMagazine.
+В разбор попадают посты, где упомянута монета; в фоновую слежку X не подключён — она
+опрашивала бы платный API каждые 5 минут.
 
 Включается кнопкой «📰 Новости BTC» под разбором, в разделе «🔔 Слежки» («+ 📰 Новости монеты»,
 «🆕 Все листинги») или словами: «следи за новостями SOL», «следи за листингами». ИИ не нужен.
@@ -405,7 +427,7 @@ python -m bot.sources.probe BTC --only binance,okx,coingecko -v
 | ⛓ Ончейн | 8 + 2 / 24 | mempool.space, Blockchain.com, Blockchair, Coin Metrics (MVRV, активные адреса), газ ETH, Solana RPC; Etherscan и Whale Alert (киты) по ключу |
 | 🛡 Безопасность | 3 / 9 | GoPlus (EVM и Solana), Honeypot.is, RugCheck |
 | 🌡 Настроения | 1 + 2 / 9 | Fear & Greed; CMC F&G и LunarCrush по ключу |
-| 📰 Новости | 57 + 6 / 67 | 50 RSS-лент (CoinDesk, Cointelegraph, The Block, Decrypt, DL News, Protos, Wu Blockchain, блоги Ethereum и Kraken, ForkLog, Incrypted, BeInCrypto RU…; если сайт закрыт для ботов или лента переехала — его заголовки через Google News), объявления Binance, Bybit, OKX и KuCoin, Telegram-каналы, Google News EN/RU; CryptoPanic, NewsAPI, NewsData.io, Finnhub, GNews, CryptoCompare по ключу |
+| 📰 Новости | 57 + 8 / 69 | 50 RSS-лент (CoinDesk, Cointelegraph, The Block, Decrypt, DL News, Protos, Wu Blockchain, блоги Ethereum и Kraken, ForkLog, Incrypted, BeInCrypto RU…; если сайт закрыт для ботов или лента переехала — его заголовки через Google News), объявления Binance, Bybit, OKX и KuCoin, Telegram-каналы, Google News EN/RU; X (Twitter), CryptoPanic, NewsAPI, NewsData.io, Finnhub, GNews, CryptoCompare по ключу |
 | 💬 Соцсети | 5 / 13 | Reddit, 4chan /biz/, StockTwits, Hacker News, Mastodon |
 | 🌍 Макро | 3 + 1 / 9 | Yahoo Finance (DXY, S&P 500, Nasdaq, золото, VIX, UST 10Y), курсы ЕЦБ и ЦБ РФ; FRED по ключу |
 
@@ -491,7 +513,7 @@ bot/
     http.py          aiohttp + TTL-кеш + склейка запросов
     resolver.py      тикер → CoinGecko id/имя; контракт → сеть/тикер (DexScreener)
     providers/       cex, derivatives, aggregators, dex, defi, onchain,
-                     security, sentiment, news, announcements, flows, social, macro
+                     security, sentiment, news, announcements, twitter, flows, social, macro
     probe.py         CLI-проверка и генерация каталога
   render/
     cards.py         рисует карточки (Pillow): рынок, монета, контракт, сравнение

@@ -7,8 +7,9 @@
 отвечать 403 из части стран — тогда медкарта поставит источник на паузу).
 
 Telegram: публичные каналы читаются через веб-превью t.me/s/<канал> — без
-аккаунта и ключа. Список каналов — NEWS_TG_CHANNELS в .env (через запятую);
-по умолчанию — крупные новостные каналы на английском и русском.
+аккаунта и ключа. Список каналов — NEWS_TG_CHANNELS в .env (через запятую;
+по умолчанию — крупные новостные каналы на английском и русском), плюс правки
+админа командой /channels (хранятся в базе, до 40 каналов).
 
 Ответы разбираем терпимо к названиям полей: заголовок, ссылку и время ищем по
 нескольким вариантам — биржи меняют форматы без предупреждения.
@@ -20,6 +21,7 @@ import asyncio
 import os
 import re
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -148,19 +150,54 @@ DEFAULT_CHANNELS = (
     "forklog",
     "incrypted",
 )
-MAX_CHANNELS = 15
+MAX_CHANNELS = 40
 _CHANNEL = re.compile(r"^[A-Za-z][A-Za-z0-9_]{3,31}$")
 _POST = re.compile(r'data-post="([A-Za-z0-9_]+/\d+)"')
 _TEXT = re.compile(r'<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>', re.S)
 _TIME = re.compile(r'<time[^>]*datetime="([^"]+)"')
 _BR = re.compile(r"<br\s*/?>", re.I)
+_OG_TITLE = re.compile(r'<meta property="og:title" content="([^"]*)"')
+_SUBS = re.compile(r'counter_value">([^<]+)</span>\s*<span class="counter_type">(?:subscribers?|подписчик\w*)', re.I)
+_LINK = re.compile(r"^(?:https?://)?(?:t\.me|telegram\.me)/(?:s/)?([A-Za-z0-9_]+)/?$", re.I)
 TITLE_MAX = 200
+
+# правки админа из /channels: имя в нижнем регистре -> (как писать, включён ли); грузятся из базы при старте
+_overrides: dict[str, tuple[str, bool]] = {}
+
+
+def set_overrides(overrides: dict[str, tuple[str, bool]]) -> None:
+    _overrides.clear()
+    _overrides.update(overrides)
+
+
+def channel_name(raw: str) -> str | None:
+    """«@forklog», «forklog», «https://t.me/forklog» → «forklog»; мусор → None."""
+    raw = raw.strip()
+    if m := _LINK.match(raw):
+        raw = m.group(1)
+    raw = raw.lstrip("@")
+    return raw if _CHANNEL.match(raw) else None
+
+
+def base_channels() -> list[str]:
+    """Список из .env (NEWS_TG_CHANNELS) или по умолчанию — без правок админа."""
+    raw = os.environ.get("NEWS_TG_CHANNELS", "")
+    names = [channel_name(c) for c in raw.split(",")] if raw.strip() else list(DEFAULT_CHANNELS)
+    return [c for c in dict.fromkeys(n for n in names if n)]
 
 
 def channels() -> list[str]:
-    raw = os.environ.get("NEWS_TG_CHANNELS", "")
-    names = [c.strip().lstrip("@") for c in raw.split(",")] if raw.strip() else list(DEFAULT_CHANNELS)
-    return [c for c in dict.fromkeys(names) if _CHANNEL.match(c)][:MAX_CHANNELS]
+    """Итоговый список: база минус убранные админом плюс добавленные."""
+    out, seen = [], set()
+    for c in base_channels():
+        if _overrides.get(c.lower(), (c, True))[1] and c.lower() not in seen:
+            out.append(c)
+            seen.add(c.lower())
+    for low, (display, on) in _overrides.items():
+        if on and low not in seen:
+            out.append(display)
+            seen.add(low)
+    return out[:MAX_CHANNELS]
 
 
 def _headline(fragment: str) -> str:
@@ -191,6 +228,38 @@ def parse_channel(page: str, channel: str) -> list[NewsItem]:
         out.append(NewsItem(title=title, url=f"https://t.me/{post}", published=published, source=f"TG @{channel}"))
     out.reverse()  # в превью старые сверху — делаем свежие первыми
     return out
+
+
+@dataclass(slots=True)
+class ChannelInfo:
+    name: str
+    title: str = ""
+    subscribers: str = ""  # как пишет Telegram: «1.2M»
+    posts: list[NewsItem] = field(default_factory=list)
+    ok: bool = True  # страница открылась
+
+    @property
+    def last(self) -> NewsItem | None:
+        return self.posts[0] if self.posts else None
+
+
+def parse_info(page: str, name: str) -> ChannelInfo:
+    title = _OG_TITLE.search(page)
+    subs = _SUBS.search(page)
+    return ChannelInfo(
+        name=name,
+        title=clean(title.group(1)) if title else "",
+        subscribers=clean(subs.group(1)) if subs else "",
+        posts=parse_channel(page, name),
+    )
+
+
+async def channel_info(http: Http, name: str, *, ttl: float = TTL) -> ChannelInfo:
+    """Название, подписчики и свежие посты канала — для /channels и проверки перед добавлением."""
+    try:
+        return parse_info(await http.get_text(f"https://t.me/s/{name}", ttl=ttl), name)
+    except Exception:  # noqa: BLE001 — канал не открылся: покажем это админу
+        return ChannelInfo(name=name, ok=False)
 
 
 async def telegram_items(http: Http, names: list[str] | None = None, *, ttl: float = TTL) -> list[NewsItem]:

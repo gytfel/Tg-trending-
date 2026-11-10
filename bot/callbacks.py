@@ -30,4 +30,9 @@ class ReportCb(CallbackData, prefix="rp"):
     action: str  # refresh | sources | details
 
 
+class ChanCb(CallbackData, prefix="tgc"):
+    action: str  # del | list
+    name: str = ""
+
+
 CANCEL = "cancel"

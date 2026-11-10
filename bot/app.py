@@ -32,6 +32,7 @@ from bot.services.trending import Trending
 from bot.services.watches import Watcher
 from bot.sources.health import Health
 from bot.sources.http import Http
+from bot.sources.providers import announcements
 from bot.sources.registry import load_providers
 
 log = logging.getLogger("bot")
@@ -51,6 +52,7 @@ ADMIN_COMMANDS = [
     BotCommand(command="health", description="Здоровье источников (админ)"),
     BotCommand(command="stats", description="Статистика (админ)"),
     BotCommand(command="emoji", description="Свой эмодзи-логотип для меню (админ)"),
+    BotCommand(command="channels", description="Новостные Telegram-каналы (админ)"),
 ]
 
 
@@ -59,6 +61,7 @@ async def build_services(settings: Settings) -> Services:
     registry.disable(settings.disabled)
     db = Database(settings.database_path)
     await db.connect()
+    announcements.set_overrides(await db.tg_channel_overrides())  # каналы, добавленные через /channels
     http = Http(timeout=settings.source_timeout, limit=settings.http_concurrency)
     hub = build_hub(settings)
     llm = LLM(hub, settings.llm_model, settings.llm_effort, settings.bot_name, settings.vision_model)

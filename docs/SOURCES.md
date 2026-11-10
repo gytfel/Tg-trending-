@@ -2,7 +2,7 @@
 
 > Файл сгенерирован командой `python -m bot.sources.probe --catalog docs/SOURCES.md`.
 
-Всего: **260** · ✅ подключено без ключа: **161** · 🔑 подключено, нужен ключ: **20** · 🛠 в планах: **79**
+Всего: **261** · ✅ подключено без ключа: **161** · 🔑 подключено, нужен ключ: **22** · 🛠 в планах: **78**
 
 
 ## 📊 Агрегаторы (26)
@@ -217,7 +217,7 @@
 | `cfgi` | [CFGI.io](https://cfgi.io) | 🛠 в планах | — | страх/жадность по монетам |
 | `santiment` | [Santiment](https://santiment.net) | 🛠 в планах | — | social volume, weighted sentiment |
 
-## 📰 Новости (67)
+## 📰 Новости (69)
 
 | id | Источник | Статус | Запросы | Примечание |
 |---|---|---|---|---|
@@ -284,12 +284,14 @@
 | `gnews` | [GNews](https://gnews.io) | 🔑 `GNEWS_API_KEY` | любой |  |
 | `newsapi` | [NewsAPI](https://newsapi.org) | 🔑 `NEWSAPI_KEY` | любой |  |
 | `newsdata` | [NewsData.io](https://newsdata.io) | 🔑 `NEWSDATA_API_KEY` | любой |  |
+| `twitterapi_io` | [X через twitterapi.io](https://twitterapi.io) | 🔑 `TWITTERAPI_IO_KEY` | любой | сторонний сервис, оплата за объём; аккаунты — NEWS_X_ACCOUNTS |
+| `x_twitter` | [X (Twitter)](https://x.com) | 🔑 `X_BEARER_TOKEN` | любой | официальный API, новостные аккаунты — список в NEWS_X_ACCOUNTS |
 | `tree_of_alpha` | [Tree of Alpha](https://news.treeofalpha.com) | 🛠 в планах | — | быстрая лента, websocket |
 | `coindesk_data_news` | [CoinDesk Data News API](https://developers.coindesk.com) | 🛠 в планах | — |  |
 | `coinmarketcal` | [CoinMarketCal](https://coinmarketcal.com) | 🛠 в планах | — | календарь событий |
 | `messari_news` | [Messari News](https://messari.io/news) | 🛠 в планах | — |  |
 
-## 💬 Соцсети (12)
+## 💬 Соцсети (11)
 
 | id | Источник | Статус | Запросы | Примечание |
 |---|---|---|---|---|
@@ -303,7 +305,6 @@
 | `google_trends` | [Google Trends](https://trends.google.com) | 🛠 в планах | — | нет официального API |
 | `farcaster` | [Farcaster (Neynar)](https://neynar.com) | 🛠 в планах | — |  |
 | `github` | [GitHub (активность разработки)](https://github.com) | 🛠 в планах | — |  |
-| `x_twitter` | [X (Twitter)](https://x.com) | 🛠 в планах | — | упоминания, KOL |
 | `youtube` | [YouTube](https://www.youtube.com) | 🛠 в планах | — |  |
 
 ## 🌍 Макро (9)

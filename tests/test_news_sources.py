@@ -260,3 +260,97 @@ async def test_news_watch_gets_exchange_listing(db):
     assert await w.tick() == 1
     chat, text = bot.sent[0]
     assert chat == 42 and "New Listing: XYZ/USDT" in text and "Bybit" in text
+
+
+# --- правки списка каналов (/channels) -----------------------------------------------------------------
+
+
+def test_channel_name_and_overrides(monkeypatch):
+    assert ann.channel_name("https://t.me/s/forklog/") == "forklog"
+    assert ann.channel_name("@WatcherGuru") == "WatcherGuru" and ann.channel_name("t.me/+invite") is None
+    monkeypatch.setenv("NEWS_TG_CHANNELS", "forklog,incrypted")
+    try:
+        ann.set_overrides({"incrypted": ("incrypted", False), "wublockchain": ("WuBlockchain", True)})
+        assert ann.channels() == ["forklog", "WuBlockchain"]  # убранный из .env и добавленный админом
+    finally:
+        ann.set_overrides({})
+
+
+def test_parse_info():
+    page = (
+        '<meta property="og:title" content="ForkLog &amp; Co">'
+        '<span class="counter_value">1.2M</span> <span class="counter_type">subscribers</span>' + TG_PAGE
+    )
+    info = ann.parse_info(page, "forklog")
+    assert info.title == "ForkLog & Co" and info.subscribers == "1.2M" and info.last.url.endswith("/102")
+
+
+async def test_db_channel_overrides(db):
+    await db.set_tg_channel("WuBlockchain", True)
+    await db.set_tg_channel("forklog", False)
+    await db.set_tg_channel("wublockchain", False)  # то же имя в другом регистре — одна запись
+    assert await db.tg_channel_overrides() == {"wublockchain": ("wublockchain", False), "forklog": ("forklog", False)}
+
+
+# --- X (Twitter) ---------------------------------------------------------------------------------------
+
+
+def test_x_query_fits_limit():
+    from bot.sources.providers import twitter
+
+    q = twitter.build_query(XYZ, [f"acc{i:02d}" for i in range(60)], cashtag=True)
+    assert q.startswith('($XYZ OR XYZ OR "Xyzcoin") (from:acc00 OR ') and q.endswith(") -is:retweet")
+    assert len(q) <= twitter.MAX_QUERY
+    assert twitter.build_query(None, ["a", "b"], cashtag=False) == "(from:a OR from:b) -is:retweet"
+
+
+def test_x_accounts_from_env(monkeypatch):
+    from bot.sources.providers import twitter
+
+    monkeypatch.setenv("NEWS_X_ACCOUNTS", "@tier10k, WatcherGuru, bad handle, tier10k, waytoolonghandle12345")
+    assert twitter.accounts() == ["tier10k", "WatcherGuru"]
+
+
+async def test_x_official_api(registry):
+    http = FakeHttp().add(
+        "api.x.com/2/tweets/search/recent",
+        {
+            "data": [
+                {"id": "111", "text": "BREAKING: Xyzcoin listed on Coinbase https://t.co/abc", "author_id": "1",
+                 "created_at": "2026-11-10T10:00:00.000Z"},
+                {"id": "112", "text": "Bitcoin ETF flows hit record", "author_id": "2"},
+            ],
+            "includes": {"users": [{"id": "1", "username": "WatcherGuru"}, {"id": "2", "username": "tier10k"}]},
+        },
+    )  # fmt: skip
+    items = await registry.get("x_twitter").fetcher(Ctx(http=http, asset=XYZ, key="TOKEN"))
+    assert [(n.title, n.url, n.source) for n in items] == [
+        ("BREAKING: Xyzcoin listed on Coinbase", "https://x.com/WatcherGuru/status/111", "X @WatcherGuru")
+    ]
+    assert items[0].published == datetime(2026, 11, 10, 10, 0, tzinfo=UTC)
+    _, _, params = http.calls[0]
+    assert params["max_results"] == 10 and "from:WatcherGuru" in params["query"]
+
+
+async def test_x_official_empty_is_no_data(registry):
+    from bot.sources.base import NoData
+
+    http = FakeHttp().add("api.x.com/2/tweets/search/recent", {"meta": {"result_count": 0}})
+    with pytest.raises(NoData):
+        await registry.get("x_twitter").fetcher(Ctx(http=http, asset=XYZ, key="TOKEN"))
+
+
+async def test_twitterapi_io(registry):
+    http = FakeHttp().add(
+        "api.twitterapi.io/twitter/tweet/advanced_search",
+        {
+            "tweets": [
+                {"id": "9", "url": "https://x.com/lookonchain/status/9", "text": "Whale bought 2M $XYZ",
+                 "createdAt": "Tue Nov 10 09:30:00 +0000 2026", "author": {"userName": "lookonchain"}},
+            ],
+            "has_next_page": False,
+        },
+    )  # fmt: skip
+    (n,) = await registry.get("twitterapi_io").fetcher(Ctx(http=http, asset=XYZ, key="K"))
+    assert n.source == "X @lookonchain" and n.published == datetime(2026, 11, 10, 9, 30, tzinfo=UTC)
+    assert "$XYZ" in http.calls[0][2]["query"]

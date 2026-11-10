@@ -947,6 +947,50 @@ async def test_screener_in_group_replies(screener_env):
     assert last.chat_id == GROUP.id and last.reply_parameters is not None and "Скринер · рост" in last.text
 
 
+# --- /channels: новостные Telegram-каналы ---------------------------------------------------------
+
+TG_OK = """<meta property="og:title" content="Wu Blockchain">
+<div class="tgme_channel_info_counter"><span class="counter_value">120K</span> <span class="counter_type">subscribers</span></div>
+<div class="tgme_widget_message js-widget_message" data-post="wublockchain/5">
+<div class="tgme_widget_message_text js-message_text" dir="auto">Binance will list XYZ token tomorrow</div>
+<time datetime="2026-11-10T10:00:00+00:00">10:00</time></div>"""  # noqa: E501
+
+
+async def test_channels_admin_add_and_remove(registry, dispatcher, monkeypatch):
+    from bot.sources.providers import announcements as ann
+
+    monkeypatch.setenv("NEWS_TG_CHANNELS", "forklog")
+    ann.set_overrides({})
+    session, feed, svc = await make_env(registry, dispatcher, admin_ids=str(UID))
+    svc.http.routes.insert(0, ("t.me/s/wublockchain", TG_OK))
+    svc.http.routes.insert(0, ("t.me/s/forklog", TG_OK.replace("wublockchain/5", "forklog/9")))
+    try:
+        await feed(msg("/channels add https://t.me/wublockchain @nochannel bad!name"))
+        text = session.last().text
+        assert "✅ Добавил @wublockchain — Wu Blockchain · 120K подписчиков" in text
+        assert "«Binance will list XYZ token tomorrow»" in text
+        assert "❌ @nochannel — не нашёл публичных постов" in text and "❌ bad!name — не похоже на канал" in text
+        assert ann.channels() == ["forklog", "wublockchain"]
+        assert (await svc.db.tg_channel_overrides())["wublockchain"] == ("wublockchain", True)
+
+        await feed(msg("/channels"))
+        last = session.last()
+        assert "📡 <b>Новостные Telegram-каналы</b> · 2 из 40" in last.text
+        assert "✅ @forklog — Wu Blockchain · 120K" in last.text and "🗑 @wublockchain" in session.buttons()
+
+        await feed(cb(session.button_data("🗑 @forklog")))  # убрать канал из .env кнопкой
+        assert ann.channels() == ["wublockchain"] and "@forklog" not in session.last().text
+        await feed(msg("/channels del @wublockchain"))
+        assert "🗑 Убрал @wublockchain." in session.last().text and ann.channels() == []
+
+        before = len(session.texts())
+        await feed(msg("/channels add @x1234", user=OTHER, chat=Chat(id=OTHER.id, type="private")))  # не админ
+        assert len(session.texts()) == before
+    finally:
+        ann.set_overrides({})
+        await svc.db.close()
+
+
 # --- новые токены на DEX ------------------------------------------------------------------------
 
 

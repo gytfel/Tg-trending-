@@ -61,6 +61,12 @@ CREATE TABLE IF NOT EXISTS alerts (          -- уже отправленные 
     PRIMARY KEY (user_id, key)
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_user ON alerts (user_id, symbol, created_at);
+CREATE TABLE IF NOT EXISTS tg_channels (     -- правки админа к списку новостных Telegram-каналов
+    name       TEXT PRIMARY KEY,             -- имя канала в нижнем регистре
+    display    TEXT NOT NULL,                -- как ввёл админ: WatcherGuru
+    enabled    INTEGER NOT NULL,             -- 1 — добавлен, 0 — убран из списка по умолчанию
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -301,6 +307,21 @@ class Database:
     async def count_watches(self, user_id: int) -> int:
         async with self.db.execute("SELECT COUNT(*) FROM watches WHERE user_id = ? AND active = 1", (user_id,)) as cur:
             return (await cur.fetchone())[0]
+
+    # -- новостные Telegram-каналы ---------------------------------------------------
+
+    async def tg_channel_overrides(self) -> dict[str, tuple[str, bool]]:
+        """Имя в нижнем регистре -> (как писать, включён ли)."""
+        async with self.db.execute("SELECT name, display, enabled FROM tg_channels") as cur:
+            return {r["name"]: (r["display"], bool(r["enabled"])) for r in await cur.fetchall()}
+
+    async def set_tg_channel(self, display: str, enabled: bool) -> None:
+        await self.db.execute(
+            "INSERT INTO tg_channels (name, display, enabled, created_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(name) DO UPDATE SET display = excluded.display, enabled = excluded.enabled",
+            (display.lower(), display, int(enabled), now_iso()),
+        )
+        await self.db.commit()
 
     # -- статистика запросов --------------------------------------------------------
 
