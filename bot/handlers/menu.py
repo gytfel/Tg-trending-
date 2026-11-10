@@ -22,7 +22,7 @@ router = Router(name="menu")
 async def render_menu(svc: Services, user_id: int) -> str:
     quota = await svc.quota.status(user_id)
     watches = await svc.db.count_watches(user_id)
-    return texts.main_menu(svc.settings.bot_name, quota, watches)
+    return texts.main_menu(svc.settings.bot_name, quota, watches, svc.settings.brand_icon)
 
 
 def is_group(event: Message | CallbackQuery) -> bool:
@@ -34,7 +34,11 @@ async def show_menu(event: Message | CallbackQuery, bot: Bot, svc: Services) -> 
     """В личке — полное меню с запасом и слежками, в группе — общее без личных данных."""
     if is_group(event):
         username = (await bot.me()).username
-        await show(event, texts.group_menu(svc.settings.bot_name, username), keyboards.group_menu(username))
+        await show(
+            event,
+            texts.group_menu(svc.settings.bot_name, username, svc.settings.brand_icon),
+            keyboards.group_menu(username),
+        )
     else:
         await show(event, await render_menu(svc, event.from_user.id), keyboards.main_menu())
 

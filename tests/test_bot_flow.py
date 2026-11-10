@@ -261,7 +261,7 @@ async def test_start_shows_main_menu(env):
     session, feed, _ = env
     await feed(msg("/start"))
     text = session.last().text
-    assert "✱ <b>Trending</b> · ИИ-аналитик" in text
+    assert "✾ <b>Trending</b> · ИИ-аналитик" in text  # знак бренда — как на логотипе
     assert "Запас на сегодня ▰▰▰▰▰▰▰▰▰▰ 100%" in text
     assert "Слежки — пока нет" in text
     assert session.buttons() == ["✱ Разобрать монету", "🔔 Слежки", "🧠 Навыки", "👤 Профиль", "❓ Помощь"]

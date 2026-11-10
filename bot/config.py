@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     # Telegram
     bot_token: str
     bot_name: str = "Trending"
+    brand_icon: str = "✾"  # знак перед названием в меню (ближайший к логотипу символ)
     admin_ids: str = ""  # через запятую: безлимит и /sources с проверкой
     support_url: str = ""  # кнопка «💬 Поддержка» в помощи, например https://t.me/your_support
     rules_url: str = ""  # ссылка «Правила использования» в помощи

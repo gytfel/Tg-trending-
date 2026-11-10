@@ -8,29 +8,30 @@ from bot.services.quota import QuotaStatus
 from bot.sources.base import CATEGORY_META, Category
 
 STAR = "✱"
+BRAND = "✾"  # знак бренда перед названием бота — ближайший к логотипу (шесть лепестков-лент)
 SKILL_NAME_MAX = 40
 SKILL_BODY_MAX = 2000
 
 
-def main_menu(bot_name: str, quota: QuotaStatus, watches: int) -> str:
+def main_menu(bot_name: str, quota: QuotaStatus, watches: int, icon: str = BRAND) -> str:
     if watches:
         w = f"{watches} {plural(watches, 'активная', 'активные', 'активных')}"
     else:
         w = "пока нет"
     q = "безлимит" if quota.unlimited else f"{progress_bar(quota.pct)} {quota.pct}%"
     return (
-        f"{STAR} <b>{esc(bot_name)}</b> · ИИ-аналитик\n\n"
+        f"{esc(icon)} <b>{esc(bot_name)}</b> · ИИ-аналитик\n\n"
         f"Запас на сегодня {q}\n"
         f"Слежки — {w}\n\n"
         "Напиши тикер или вопрос — начну разбор."
     )
 
 
-def group_menu(bot_name: str, bot_username: str | None) -> str:
+def group_menu(bot_name: str, bot_username: str | None, icon: str = BRAND) -> str:
     """Меню в группе: без личного запаса и слежек — они открываются в личке."""
     ask = f"<code>@{esc(bot_username)} BTC</code> или " if bot_username else ""
     return (
-        f"{STAR} <b>{esc(bot_name)}</b> · ИИ-аналитик\n\n"
+        f"{esc(icon)} <b>{esc(bot_name)}</b> · ИИ-аналитик\n\n"
         f"Спроси меня прямо здесь: {ask}<code>/ask BTC</code>\n"
         "Навыки, слежки и профиль — в личке, чтобы не светить их в общем чате."
     )
