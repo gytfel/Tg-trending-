@@ -265,7 +265,7 @@ def test_for_ai_adds_bot_numbers():
     assert [s.name for s in out] == ["Новости", "мой стиль", "риск"]
     assert out[0].content.startswith("Только про ETF") and "📰 новости" in out[0].content  # свой текст + цифры
     assert out[1] is tejki
-    assert out[2].content.startswith("Помоги с риск-менеджментом") and "позиция $800" in out[2].content
+    assert out[2].content.startswith("Ты — риск-менеджер") and "позиция $800" in out[2].content
 
 
 def test_new_ta_skills_found_by_words():
@@ -321,3 +321,13 @@ def test_synthesis_only_for_several_directional_skills():
 def test_synth_skill_found_by_words():
     assert [b.key for b in sb.find([], "свод по BTC")] == ["свод"]
     assert "навык свод" in run("свод", [], kind="overview")
+
+
+def test_builtin_prompts_fit_skill_limit():
+    from bot.services.skill_prompts import PROMPTS
+    from bot.texts import SKILL_BODY_MAX
+
+    assert set(PROMPTS) == {b.key for b in sb.ALL}
+    for b in sb.ALL:
+        assert b.prompt == PROMPTS[b.key]
+        assert 300 <= len(b.prompt) <= SKILL_BODY_MAX, b.key  # как свой навык: до 2000 символов
