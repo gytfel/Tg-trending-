@@ -947,6 +947,41 @@ async def test_screener_in_group_replies(screener_env):
     assert last.chat_id == GROUP.id and last.reply_parameters is not None and "Скринер · рост" in last.text
 
 
+# --- длинный ответ ИИ: без лимита, несколькими сообщениями --------------------------------------------
+
+
+class LongHub(AIHub):
+    """ИИ, который по просьбе пишет очень подробно — ответ длиннее подписи и одного сообщения."""
+
+    def __init__(self):
+        super().__init__({"ANTHROPIC_API_KEY": "k"})
+        self.system = ""
+
+    async def complete(self, ref, system, prompt, **kw):
+        self.system = system
+        return "\n\n".join(f"Пункт {i}: " + "подробный разбор фактора " * 14 for i in range(30))
+
+    async def stream(self, ref, system, prompt, **kw):
+        yield await self.complete(ref, system, prompt, **kw)
+
+
+async def test_long_ai_answer_is_not_cut(registry, dispatcher):
+    hub = LongHub()
+    session, feed, svc = await make_env(registry, dispatcher, hub=hub, report_style="card")
+    try:
+        await feed(msg("разбери BTC максимально подробно"))
+        assert "до 850 символов" not in hub.system and "жёсткого лимита длины нет" in hub.system
+        photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+        assert photo.caption == "👇 Ответ — ниже"  # в подпись не влез — картинка сверху, текст под ней
+        texts_ = [r.text for r in session.requests if isinstance(r, (SendMessage, EditMessageText)) and r.text]
+        joined = "\n".join(texts_)
+        assert "Пункт 0:" in joined and "Пункт 29:" in joined  # ответ целиком, без обрезки
+        assert all(len(t) <= 4096 for t in texts_)
+        assert session.last().reply_markup is not None  # кнопки — на последнем сообщении
+    finally:
+        await svc.db.close()
+
+
 # --- вопросы без монеты: словарь и ИИ ----------------------------------------------------------------
 
 

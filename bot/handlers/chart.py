@@ -17,6 +17,7 @@ from aiogram.utils.chat_action import ChatActionSender
 
 from bot import keyboards, texts
 from bot.ai import AIError, Image
+from bot.formatting import split_message
 from bot.handlers.analyze import _brand, run_analysis
 from bot.handlers.common import safe_edit
 from bot.handlers.draft import Draft, drafts_available
@@ -143,7 +144,11 @@ async def _answer(message: Message, bot: Bot, svc: Services, file, media: str, c
     full = f"{head}{to_html(text)}\n\n<i>Разбор по картинке — не финсовет.</i>"
     if live is not None and live.started:
         await live.finish(full, full, kb)
-    elif thinking.message is not None:
-        await safe_edit(thinking.message, full, kb)
-    else:
-        await message.answer(full, reply_markup=kb)
+        return
+    parts = split_message(full)  # длинный разбор — несколькими сообщениями, кнопки на последнем
+    for i, part in enumerate(parts):
+        markup = kb if i == len(parts) - 1 else None
+        if i == 0 and thinking.message is not None:
+            await safe_edit(thinking.message, part, markup)
+        else:
+            await message.answer(part, reply_markup=markup)

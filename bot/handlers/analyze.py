@@ -22,7 +22,7 @@ from bot.formatting import esc, split_message
 from bot.handlers import streaming
 from bot.handlers.common import now_in, safe_edit, show
 from bot.handlers.draft import Draft, DraftUnavailable, drafts_available
-from bot.handlers.live import LiveAnswer, send_card
+from bot.handlers.live import BELOW, LiveAnswer, send_card
 from bot.handlers.screener import send_screen
 from bot.handlers.thinking import ThinkingMessage
 from bot.query_parser import parse_query
@@ -418,17 +418,17 @@ async def _send_card(
         send_photo = chat_msg.reply_photo if reply else chat_msg.answer_photo
         if fits:
             sent = await send_photo(photo, caption=fr[0] if fr else caption, reply_markup=None if fr else kb)
-        else:
-            sent = await send_photo(photo)
+        else:  # ответ длиннее подписи — картинка сверху, весь текст сообщениями под ней
+            sent = await send_photo(photo, caption=BELOW if caption else None)
     except Exception:  # noqa: BLE001 — картинка не должна ломать ответ
         log.exception("card report failed, falling back to text")
         return None
     if progress is not None:
         with contextlib.suppress(TelegramBadRequest):
             await progress.delete()  # «Думаю…» больше не нужно — ответ пришёл картинкой
-    if not fits:  # длинный текст — отдельным сообщением под картинкой
+    if not fits:  # длинный текст — отдельными сообщениями под картинкой, сколько бы их ни понадобилось
         first = await chat_msg.answer("✍️")
-        return await _stream_edit(first, caption or result.text, kb, pace)
+        return await _send_text(chat_msg, first, caption or result.text, kb, pace)
     if fr:
 
         async def edit(t: str, k: InlineKeyboardMarkup | None) -> None:
