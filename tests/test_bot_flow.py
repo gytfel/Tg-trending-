@@ -409,6 +409,19 @@ async def test_profile_help_sources(env):
     assert "🔌 Источники данных" not in session.buttons() and "/sources" not in help_text  # не админ
 
 
+async def test_stats_explains_why_ai_is_off(registry, dispatcher):
+    hub = AIHub({"OPENROUTER_API_KEY": "sk-or"})  # ключ OpenRouter, а модель по умолчанию — Claude
+    session, feed, svc = await make_env(registry, dispatcher, admin_ids=str(UID))
+    svc.hub = hub
+    try:
+        await feed(msg("/stats"))
+        text = session.last().text
+        assert "🤖 ИИ: выключен" in text and "нужен ANTHROPIC_API_KEY, а он пустой" in text
+        assert "OpenRouter → LLM_MODEL=openrouter:" in text and "sk-or" not in text
+    finally:
+        await svc.db.close()
+
+
 async def test_sources_screen_is_admin_only(registry, dispatcher):
     session, feed, svc = await make_env(registry, dispatcher, admin_ids=str(UID))
     try:

@@ -13,6 +13,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from bot import keyboards, texts
+from bot.ai import diagnose
 from bot.callbacks import CANCEL, Nav
 from bot.formatting import esc
 from bot.handlers import skills, watches
@@ -172,8 +173,16 @@ async def admin_stats(message: Message, svc: Services) -> None:
         f"🔌 Источников активно: {st['active']} из {st['total']}"
         + (f" · ⏸ на паузе {paused} (/health)" if paused else "")
         + "\n"
-        f"🤖 ИИ: {esc(svc.ai_status())}"
+        f"🤖 ИИ: {esc(svc.ai_status())}" + ai_problems(svc)
     )
+
+
+def ai_problems(svc: Services) -> str:
+    """Почему главный аналитик выключен: ключ не того провайдера, модель без провайдера, дубли в .env."""
+    if svc.llm.enabled or svc.hub is None:
+        return ""
+    lines = diagnose.explain(svc.hub, svc.settings.llm_model)
+    return "".join(f"\n   {esc(x)}" for x in lines)
 
 
 @router.message(Command("health"))

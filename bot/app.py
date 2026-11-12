@@ -14,7 +14,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeChat
 from dotenv import load_dotenv
 
-from bot.ai import AIHub
+from bot.ai import AIHub, diagnose
 from bot.config import Settings
 from bot.db import Database
 from bot.handlers import build_router
@@ -146,6 +146,9 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True),
     )
     dp = build_dispatcher(svc)
+    if not svc.llm.enabled and svc.hub is not None:
+        # без этого «ИИ выключен» в боте приходится угадывать: пишем причину в лог при запуске
+        log.warning("ИИ (главный аналитик) выключен: %s", " ".join(diagnose.explain(svc.hub, settings.llm_model)))
     watcher = asyncio.create_task(Watcher(bot, svc.db, svc.prices, settings.watch_interval).run())
     news = asyncio.create_task(
         NewsWatcher(bot, svc.db, svc.http, svc.prices, interval=settings.news_watch_interval).run()
