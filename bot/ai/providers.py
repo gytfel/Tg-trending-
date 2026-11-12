@@ -54,7 +54,15 @@ MAX_TOKENS_PARAM = {"openai": "max_completion_tokens"}
 
 
 class AIError(Exception):
-    """Провайдер не дал ответ (сеть, лимиты, неверный ключ…). Сообщение — коротко, для лога и UI."""
+    """Провайдер не дал ответ (сеть, лимиты, неверный ключ…). Сообщение — коротко, для лога и UI.
+
+    status и body — код и начало ответа провайдера (для /models: показать причину по-человечески).
+    """
+
+    def __init__(self, message: str = "", *, status: int | None = None, body: str = "") -> None:
+        super().__init__(message)
+        self.status = status
+        self.body = body
 
 
 class Refused(AIError):
@@ -267,9 +275,9 @@ class OpenAICompatProvider(Provider):
         try:
             async with session.post(f"{self.base_url}/chat/completions", json=body, headers=headers) as resp:
                 if resp.status >= 400:
-                    detail = (await resp.text(errors="replace"))[:300]
+                    detail = (await resp.text(errors="replace"))[:600]
                     log.warning("%s %s: HTTP %s %s", self.name, model, resp.status, detail)
-                    raise AIError(f"HTTP {resp.status}")
+                    raise AIError(f"HTTP {resp.status}", status=resp.status, body=detail)
                 data = await resp.json(content_type=None)
         except (aiohttp.ClientError, TimeoutError) as e:
             log.warning("%s %s: нет соединения: %r", self.name, model, e)
@@ -303,9 +311,9 @@ class OpenAICompatProvider(Provider):
         try:
             async with session.post(f"{self.base_url}/chat/completions", json=body, headers=headers) as resp:
                 if resp.status >= 400:
-                    detail = (await resp.text(errors="replace"))[:300]
+                    detail = (await resp.text(errors="replace"))[:600]
                     log.warning("%s %s: HTTP %s %s", self.name, model, resp.status, detail)
-                    raise AIError(f"HTTP {resp.status}")
+                    raise AIError(f"HTTP {resp.status}", status=resp.status, body=detail)
                 async for line in resp.content:
                     if piece := _SSE.delta(line):
                         yield piece

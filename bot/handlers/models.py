@@ -20,7 +20,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot import keyboards, texts
 from bot.ai import diagnose, models
-from bot.ai.providers import ModelRef
+from bot.ai.providers import AIError, ModelRef
 from bot.callbacks import ModelCb, Nav
 from bot.formatting import esc
 from bot.handlers.common import show
@@ -80,8 +80,16 @@ async def try_model(svc: Services, spec: str) -> tuple[bool, str]:
         )
     except TimeoutError:
         return False, f"не ответила за {TEST_TIMEOUT} с"
+    except AIError as e:
+        if str(e) == "пустой ответ":  # связь есть, просто думающая модель потратила лимит пробы на рассуждения
+            return True, f"{time.monotonic() - t0:.1f} с (пустой ответ на пробу — проверь обычным вопросом)"
+        if e.status:
+            return False, models._short(e, svc.hub)
+        return False, models.hide_keys(str(e), svc.hub)[:200]
     except Exception as e:  # noqa: BLE001
-        return False, models._short(e) if getattr(e, "status", None) else str(e)[:200]
+        if getattr(e, "status", None):
+            return False, models._short(e, svc.hub)
+        return False, models.hide_keys(str(e), svc.hub)[:200]
     return True, f"{time.monotonic() - t0:.1f} с"
 
 

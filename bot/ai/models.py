@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -30,14 +31,20 @@ _PREFER = (
     ("gpt-oss", 3),
     ("deepseek", 3),
     ("qwen", 2),
+    ("gemma", 2),
     ("pro", 2),
     ("versatile", 2),
     ("opus", 2),
+    ("120b", 1),
     ("llama", 1),
+    ("mistral", 1),
     ("kimi", 1),
     ("glm", 1),
     ("haiku", 1),
 )
+# что ниже: заточены под код, урезанные, экспериментальные, служебные маршрутизаторы
+_WORSE = (("code", 3), ("coder", 3), ("preview", 1), ("exp", 1), ("lite", 1), ("mini", 1), ("nano", 2),
+          ("7b", 1), ("8b", 1), ("openrouter/", 2))  # fmt: skip
 _NUM = re.compile(r"\d+(?:\.\d+)?")
 
 
@@ -58,9 +65,7 @@ class Choice:
 
 def _rank(model: str) -> tuple:
     low = model.lower()
-    score = sum(w for word, w in _PREFER if word in low)
-    if "preview" in low or "exp" in low:
-        score -= 1
+    score = sum(w for word, w in _PREFER if word in low) - sum(w for word, w in _WORSE if word in low)
     version = tuple(-float(x) for x in _NUM.findall(low)[:2])  # новее — выше
     return (-score, version, low)
 
@@ -92,14 +97,24 @@ async def list_models(http: Http, hub: AIHub, provider: str) -> list[str]:
     headers = {"Authorization": f"Bearer {hub._get(env)}"} if env and hub._get(env) else {}
     d = await http.get_json(f"{base.rstrip('/')}/models", headers=headers, ttl=TTL)
     rows = _rows(d)
-    if provider == "openrouter":  # только бесплатные: цена запроса и ответа — ноль
-        rows = [r for r in rows if str(r.get("id", "")).endswith(":free") or _free(r)]
+    if provider == "openrouter":  # только бесплатные и только те, что отвечают текстом
+        rows = [r for r in rows if (str(r.get("id", "")).endswith(":free") or _free(r)) and _text_out(r)]
     return [str(r["id"]).removeprefix("models/") for r in rows if r.get("id") and r.get("active", True) is not False]
 
 
 def _rows(d: Any) -> list[dict]:
     rows = d.get("data") if isinstance(d, dict) else d
     return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+
+def _text_out(row: dict) -> bool:
+    """Модель отвечает текстом (а не музыкой или картинкой) — по описанию OpenRouter."""
+    arch = row.get("architecture") or {}
+    outs = arch.get("output_modalities")
+    if isinstance(outs, list):
+        return "text" in outs and "text" in (arch.get("input_modalities") or ["text"])
+    modality = str(arch.get("modality") or "text->text")
+    return modality.split("->")[-1].strip() == "text"
 
 
 def _free(row: dict) -> bool:
@@ -122,14 +137,50 @@ async def choices(http: Http, hub: AIHub) -> tuple[list[Choice], dict[str, str]]
         try:
             out += suggest(provider, await list_models(http, hub, provider))
         except Exception as e:  # noqa: BLE001 — один провайдер не мешает остальным
-            errors[provider] = _short(e)
+            errors[provider] = _short(e, hub)
     return out, errors
 
 
-def _short(e: Exception) -> str:
+def _short(e: Exception, hub: AIHub | None = None) -> str:
+    """Причина ошибки по-человечески — из ответа провайдера, без ключей."""
     status = getattr(e, "status", None)
-    if status in (401, 403):
-        return "ключ не подошёл"
+    body = str(getattr(e, "body", "") or "")
+    reason = provider_reason(body)
+    low = (reason + " " + body).lower()
+    if "location is not supported" in low or "not available in your country" in low or "unsupported_country" in low:
+        return (
+            "провайдер не работает из страны, где стоит сервер бота (Gemini, например, недоступен из России) — "
+            "нужен сервер в другой стране или другой провайдер"
+        )
+    if "api_key_invalid" in low or "api key not valid" in low or "invalid api key" in low or status in (401, 403):
+        return "ключ не подошёл — проверь, что скопирован целиком, без пробелов и кавычек"
     if status == 429:
         return "лимит запросов, попробуй позже"
-    return f"HTTP {status}" if status else type(e).__name__
+    text = f"HTTP {status}" if status else type(e).__name__
+    if reason:
+        text += f": {reason}"
+    return hide_keys(text, hub)[:240]
+
+
+def provider_reason(body: str) -> str:
+    """Текст ошибки из JSON-ответа провайдера: {"error": {"message": …}} или {"message": …}."""
+    try:
+        d = json.loads(body)
+    except (ValueError, TypeError):
+        return ""
+    err = d.get("error") if isinstance(d, dict) else None
+    if isinstance(err, dict):
+        return str(err.get("message") or err.get("status") or "")[:200]
+    if isinstance(err, str):
+        return err[:200]
+    return str(d.get("message") or "")[:200] if isinstance(d, dict) else ""
+
+
+def hide_keys(text: str, hub: AIHub | None) -> str:
+    """На всякий случай вырезаем из текста ошибки любые ключи из .env."""
+    if hub is None:
+        return text
+    for env in (key_env(p) for p in TITLES):
+        if env and (value := hub._get(env)) and len(value) >= 8:
+            text = text.replace(value, "***")
+    return text
