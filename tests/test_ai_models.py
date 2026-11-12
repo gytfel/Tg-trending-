@@ -28,7 +28,7 @@ OPENROUTER = {
         {  # музыкальная модель: цена ноль, но отвечает не текстом
             "id": "google/lyria-3-pro-preview",
             "pricing": {"prompt": "0", "completion": "0"},
-            "architecture": {"input_modalities": ["text"], "output_modalities": ["audio"]},
+            "architecture": {"input_modalities": ["text"], "output_modalities": ["audio", "text"]},
         },
         {
             "id": "google/gemma-4-31b-it:free",

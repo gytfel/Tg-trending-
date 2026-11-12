@@ -21,7 +21,8 @@ TTL = 300
 PER_PROVIDER = 6
 _SKIP = re.compile(
     r"(?i)embed|whisper|tts|audio|transcri|speech|image|imagen|veo|dall-e|sora|aqa|guard|moderation|"
-    r"realtime|native|-live|learnlm|robotics|computer-use|distil|playai|orpheus|prompt-guard|safeguard"
+    r"realtime|native|-live|learnlm|robotics|computer-use|distil|playai|orpheus|prompt-guard|safeguard|"
+    r"lyria|music|song|suno|video"
 )
 # что ставим выше: сильные и недорогие модели для аналитика
 _PREFER = (
@@ -111,8 +112,8 @@ def _text_out(row: dict) -> bool:
     """Модель отвечает текстом (а не музыкой или картинкой) — по описанию OpenRouter."""
     arch = row.get("architecture") or {}
     outs = arch.get("output_modalities")
-    if isinstance(outs, list):
-        return "text" in outs and "text" in (arch.get("input_modalities") or ["text"])
+    if isinstance(outs, list):  # только текст на выходе: «текст + музыка» или «текст + картинка» — не аналитик
+        return set(outs) == {"text"} and "text" in (arch.get("input_modalities") or ["text"])
     modality = str(arch.get("modality") or "text->text")
     return modality.split("->")[-1].strip() == "text"
 
