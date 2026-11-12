@@ -105,5 +105,5 @@ def explain(hub: AIHub, spec: str, path: Path = ENV_PATH) -> list[str]:
     else:
         lines.append("Ни одного ключа ИИ в .env нет — впиши ключ и LLM_MODEL того же провайдера.")
     lines += [f"⚠️ {d}" for d in env_duplicates(path)]
-    lines.append("Поправить: tg-trending config на сервере.")
+    lines.append("Поправить: выбери модель кнопкой — /models, или впиши LLM_MODEL через tg-trending config.")
     return lines

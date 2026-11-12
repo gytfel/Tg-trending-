@@ -61,6 +61,10 @@ CREATE TABLE IF NOT EXISTS alerts (          -- уже отправленные 
     PRIMARY KEY (user_id, key)
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_user ON alerts (user_id, symbol, created_at);
+CREATE TABLE IF NOT EXISTS kv (               -- настройки, которые админ меняет из бота (модель ИИ)
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS tg_channels (     -- правки админа к списку новостных Telegram-каналов
     name       TEXT PRIMARY KEY,             -- имя канала в нижнем регистре
     display    TEXT NOT NULL,                -- как ввёл админ: WatcherGuru
@@ -307,6 +311,24 @@ class Database:
     async def count_watches(self, user_id: int) -> int:
         async with self.db.execute("SELECT COUNT(*) FROM watches WHERE user_id = ? AND active = 1", (user_id,)) as cur:
             return (await cur.fetchone())[0]
+
+    # -- настройки из бота ---------------------------------------------------------------
+
+    async def get_kv(self, key: str) -> str | None:
+        async with self.db.execute("SELECT value FROM kv WHERE key = ?", (key,)) as cur:
+            row = await cur.fetchone()
+        return row["value"] if row else None
+
+    async def set_kv(self, key: str, value: str | None) -> None:
+        """None — удалить (вернуть настройку из .env)."""
+        if value is None:
+            await self.db.execute("DELETE FROM kv WHERE key = ?", (key,))
+        else:
+            await self.db.execute(
+                "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+        await self.db.commit()
 
     # -- новостные Telegram-каналы ---------------------------------------------------
 

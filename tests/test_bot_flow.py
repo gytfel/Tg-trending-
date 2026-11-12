@@ -38,7 +38,7 @@ from aiogram.types import (
     User,
 )
 
-from bot.ai import AIHub
+from bot.ai import AIError, AIHub
 from bot.app import build_dispatcher
 from bot.config import Settings
 from bot.db import Database
@@ -418,6 +418,47 @@ async def test_stats_explains_why_ai_is_off(registry, dispatcher):
         text = session.last().text
         assert "🤖 ИИ: выключен" in text and "нужен ANTHROPIC_API_KEY, а он пустой" in text
         assert "OpenRouter → LLM_MODEL=openrouter:" in text and "sk-or" not in text
+    finally:
+        await svc.db.close()
+
+
+class PickyHub(AIHub):
+    """Отвечает только Gemini flash; остальные модели падают."""
+
+    def __init__(self):
+        super().__init__({"GEMINI_API_KEY": "g", "GROQ_API_KEY": "q"})
+
+    async def complete(self, ref, system, prompt, **kw):
+        if ref.model != "gemini-9.0-flash":
+            raise AIError("HTTP 404 model not found")
+        return "ок"
+
+
+async def test_models_pick_and_persist(registry, dispatcher):
+    from tests.test_ai_models import model_http
+
+    hub = PickyHub()
+    session, feed, svc = await make_env(registry, dispatcher, hub=hub, admin_ids=str(UID))
+    svc.hub = hub
+    svc.http.routes[:0] = model_http().routes
+    try:
+        await feed(msg("/models"))
+        text = session.last().text
+        assert "Сейчас: <code>claude-opus-5-5</code> — ⚪ выключен" in text and "нужен ANTHROPIC_API_KEY" in text
+        buttons = session.buttons()
+        assert buttons[0] == "Gemini · gemini-9.0-flash" and "Groq · llama-9.3-70b-versatile" in buttons
+
+        await feed(cb(session.button_data("Groq · llama-9.3-70b-versatile")))  # не ответила — не включаем
+        assert any("не ответила" in t for t in session.texts()) and svc.llm.ref.spec == "claude-opus-5-5"
+
+        await feed(cb(session.button_data("Gemini · gemini-9.0-flash")))
+        assert any("✅ ИИ включён: <code>gemini:gemini-9.0-flash</code>" in t for t in session.texts())
+        assert svc.llm.enabled and svc.llm.ref.spec == "gemini:gemini-9.0-flash"
+        assert await svc.db.get_kv("llm_model") == "gemini:gemini-9.0-flash"  # переживёт перезапуск
+        assert "✅ Gemini · gemini-9.0-flash" in session.buttons() and "↩️ Как в .env" in session.buttons()
+
+        await feed(cb(session.button_data("↩️ Как в .env")))
+        assert svc.llm.ref.spec == "claude-opus-5-5" and await svc.db.get_kv("llm_model") is None
     finally:
         await svc.db.close()
 

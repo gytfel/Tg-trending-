@@ -1,6 +1,6 @@
 from aiogram import Router
 
-from bot.handlers import analyze, channels, chart, group_guard, menu, screener, skills, watches
+from bot.handlers import analyze, channels, chart, group_guard, menu, models, screener, skills, watches
 
 
 def build_router() -> Router:
@@ -11,6 +11,7 @@ def build_router() -> Router:
         group_guard.router,
         menu.router,
         channels.router,
+        models.router,
         skills.router,
         watches.router,
         screener.router,

@@ -181,7 +181,7 @@ def ai_problems(svc: Services) -> str:
     """Почему главный аналитик выключен: ключ не того провайдера, модель без провайдера, дубли в .env."""
     if svc.llm.enabled or svc.hub is None:
         return ""
-    lines = diagnose.explain(svc.hub, svc.settings.llm_model)
+    lines = diagnose.explain(svc.hub, svc.llm.ref.spec)
     return "".join(f"\n   {esc(x)}" for x in lines)
 
 

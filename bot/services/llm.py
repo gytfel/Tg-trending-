@@ -72,9 +72,16 @@ class LLM:
         self.hub = hub
         self.ref = ModelRef.parse(model)
         # скриншоты читает отдельная модель, если задана (VISION_MODEL), иначе — главный аналитик
-        self.vision_ref = ModelRef.parse(vision_model) if vision_model.strip() else self.ref
+        self._own_vision = bool(vision_model.strip())
+        self.vision_ref = ModelRef.parse(vision_model) if self._own_vision else self.ref
         self.effort = (effort or "").strip() or None
         self.bot_name = bot_name
+
+    def set_model(self, model: str) -> None:
+        """Сменить главного аналитика на ходу (/models); скриншоты — за ним, если VISION_MODEL не задан."""
+        self.ref = ModelRef.parse(model)
+        if not self._own_vision:
+            self.vision_ref = self.ref
 
     @property
     def model(self) -> str:

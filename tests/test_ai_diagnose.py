@@ -14,7 +14,7 @@ def test_key_of_other_provider(tmp_path):
     lines = diagnose.explain(hub, "claude-opus-5-5", tmp_path / ".env")
     assert lines[0] == "Причина: модель claude-opus-5-5 — это Claude, ей нужен ANTHROPIC_API_KEY, а он пустой."
     assert "OpenRouter → LLM_MODEL=openrouter:автор/модель:free" in lines[1]
-    assert lines[-1] == "Поправить: tg-trending config на сервере."
+    assert lines[-1].startswith("Поправить: выбери модель кнопкой — /models")
 
 
 def test_model_without_provider():

@@ -42,6 +42,7 @@ class Services:
     hub: AIHub | None = None
     health: Health | None = None  # «медкарта» источников
     busy: set[int] = field(default_factory=set)  # пользователи, у которых идёт разбор
+    model_choices: dict[int, list] = field(default_factory=dict)  # админ → последний список /models
     last: OrderedDict[int, LastQuery] = field(default_factory=OrderedDict)
     # отчёт -> запрос: кнопки «Обновить» и «Источники» относятся к своему отчёту, а не к нажавшему
     reports: OrderedDict[tuple[int, int], LastQuery] = field(default_factory=OrderedDict)

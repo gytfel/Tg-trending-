@@ -89,6 +89,11 @@ class ModelRef:
         return cls(head if sep else "", tail if sep else spec)
 
     @property
+    def spec(self) -> str:
+        """Как писать в LLM_MODEL: у Claude — просто название, у остальных — «провайдер:модель»."""
+        return self.model if self.provider == "anthropic" else f"{self.provider}:{self.model}"
+
+    @property
     def short(self) -> str:
         name = self.model.rsplit("/", 1)[-1]
         return name.removeprefix("claude-")
