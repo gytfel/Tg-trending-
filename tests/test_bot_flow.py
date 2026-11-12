@@ -947,6 +947,42 @@ async def test_screener_in_group_replies(screener_env):
     assert last.chat_id == GROUP.id and last.reply_parameters is not None and "Скринер · рост" in last.text
 
 
+# --- вопросы про акции и фондовый рынок ----------------------------------------------------------------
+
+
+async def test_stock_question_without_ai(registry, dispatcher):
+    from tests.stocks_fixtures import add_routes
+
+    session, feed, svc = await make_env(registry, dispatcher, report_style="card")
+    add_routes(svc.http)
+    try:
+        await feed(msg("почему акции Nvidia упали и весь фондовый рынок ?"))
+        text = session.last().text
+        assert text.startswith("📈 <b>Фондовый рынок · Nvidia</b>\nNvidia <b>$162.40</b> (−7.8%)")
+        assert "Jensen Huang resigns as Nvidia CEO" in text and "Nasdaq <b>21" in text
+        assert "объяснит ИИ" in text  # без ключа ИИ — честно, кто объяснит «почему»
+        assert not [r for r in session.requests if isinstance(r, SendPhoto)]  # картинка крипторынка не к месту
+    finally:
+        await svc.db.close()
+
+
+async def test_stock_question_goes_to_ai_with_quotes_and_news(registry, dispatcher):
+    from tests.stocks_fixtures import add_routes
+
+    hub = TeacherHub()
+    session, feed, svc = await make_env(registry, dispatcher, hub=hub, report_style="card")
+    add_routes(svc.http)
+    try:
+        await feed(msg("NVDA упала почему"))  # тикер акции — не монета
+        prompt = hub.prompts[-1]
+        assert "stock_market" in prompt and "Jensen Huang resigns" in prompt and '"NVDA"' in prompt
+        text = session.last().text
+        assert "📈 <b>Фондовый рынок · Nvidia</b>" in text and "🤖 <b>Вывод</b>" in text
+        assert "объяснит ИИ" not in text
+    finally:
+        await svc.db.close()
+
+
 # --- длинный ответ ИИ: без лимита, несколькими сообщениями --------------------------------------------
 
 

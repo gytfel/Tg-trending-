@@ -181,9 +181,12 @@ async def feed_items(http: Http, name: str, url: str, homepage: str, ttl: float 
     return await site_news(Ctx(http=http, asset=None), homepage, name)
 
 
-async def google_coin_news(http: Http, query: str, ttl: float = 600) -> list[NewsItem]:
-    """Google News по монете за сутки; издание берём из хвоста заголовка «… - CoinDesk»."""
-    url = f"https://news.google.com/rss/search?q={quote_plus(query)}+when:1d&hl=en-US&gl=US&ceid=US:en"
+GOOGLE_LANG = {"en": "hl=en-US&gl=US&ceid=US:en", "ru": "hl=ru&gl=RU&ceid=RU:ru"}
+
+
+async def google_coin_news(http: Http, query: str, ttl: float = 600, *, lang: str = "en") -> list[NewsItem]:
+    """Google News по запросу за сутки; издание берём из хвоста заголовка «… - CoinDesk»."""
+    url = f"https://news.google.com/rss/search?q={quote_plus(query)}+when:1d&{GOOGLE_LANG[lang]}"
     items = parse_feed(await http.get_text(url, headers=FEED_HEADERS, ttl=ttl), "Google News")
     for n in items:
         head, sep, publisher = n.title.rpartition(" - ")

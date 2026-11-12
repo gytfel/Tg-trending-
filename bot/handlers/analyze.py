@@ -27,7 +27,7 @@ from bot.handlers.screener import send_screen
 from bot.handlers.thinking import ThinkingMessage
 from bot.query_parser import parse_query
 from bot.render import Brand, render
-from bot.services import Services, dexscan, glossary, report, screener, skills_builtin
+from bot.services import Services, dexscan, glossary, report, screener, skills_builtin, stocks
 from bot.services.prose import CAPTION_LIMIT, visible_len
 
 log = logging.getLogger(__name__)
@@ -211,7 +211,13 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
     if terms and glossary.bare(text, terms):  # «сквиз лонгов?» — тоже вопрос о термине
         await send_glossary(chat_msg, terms, svc, reply=reply)
         return
-    if parsed.is_empty and not parsed.market and glossary.is_explain(text) and not _ai_on(svc):
+    if (
+        parsed.is_empty
+        and not parsed.market
+        and glossary.is_explain(text)
+        and stocks.detect(text) is None  # «объясни, почему упал Nasdaq» — это про фондовый рынок
+        and not _ai_on(svc)
+    ):
         # вопрос о понятии, которого нет в словаре, а своими словами без ИИ бот не понимает
         respond_kb = keyboards.back()
         await respond(texts.explain_unknown(glossary.popular()), reply_markup=respond_kb)
