@@ -27,6 +27,7 @@ def fixture_news_clock(monkeypatch):
 
     monkeypatch.setattr(news, "datetime", FixtureDateTime)
 
+
 BINANCE = {
     "code": "000000",
     "data": {
