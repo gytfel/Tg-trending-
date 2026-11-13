@@ -48,12 +48,16 @@ class Services:
     reports: OrderedDict[tuple[int, int], LastQuery] = field(default_factory=OrderedDict)
 
     def ai_status(self) -> str:
-        lead = self.llm.ref.short if self.llm.enabled else None
+        lead = None
+        if self.llm.enabled:
+            lead = "автовыбор модели по задаче" if self.llm.automatic else f"главный аналитик ({self.llm.ref.short})"
         if self.swarm is not None and self.swarm.enabled:
             when = "на сложные вопросы" if self.swarm.mode == "auto" else "на каждый вопрос"
             head = f"рой агентов {when}: {self.swarm.describe()}"
-            return head + (f" + главный аналитик ({lead})" if lead else "")
-        return f"один аналитик ({lead})" if lead else "выключен"
+            return head + (f" + {lead}" if lead else "")
+        if self.llm.automatic or not lead:
+            return lead or "выключен"
+        return f"один аналитик ({self.llm.ref.short})"
 
     def remember_report(
         self, chat_id: int, message_id: int, text: str, result: AnalysisResult, keep: int = 5000

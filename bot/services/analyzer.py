@@ -254,6 +254,7 @@ class Analyzer:
                 card=card,
                 prefix=[stock_block, body, news, *blocks.values()],
                 use_swarm=td is None and self._use_swarm(q, "overview", skills),
+                deep=topic is not None or swarm.swarm_reason(q, "overview", bool(skills)) is not None,
                 extra={"stock_market": stocks.context(td)} if td is not None else None,
             )
             hint = (
@@ -338,6 +339,7 @@ class Analyzer:
             card=card,
             prefix=list(sections),
             use_swarm=self._use_swarm(q, kind, skills),
+            deep=swarm.swarm_reason(q, kind, bool(skills)) is not None,
         )
         if verdict:
             sections.append(verdict)
@@ -379,7 +381,16 @@ class Analyzer:
             note += "\n\nСправка бота (опора, не противоречь ей):\n" + "\n".join(f"{t.title}: {t.text}" for t in terms)
         asked = dataclasses.replace(q, raw=f"{q.raw}\n\n({note})")
         verdict, used, agents, ai_html = await self._verdict(
-            asked, [], g, skills, progress, live=live, card=None, prefix=[], use_swarm=False
+            asked,
+            [],
+            g,
+            skills,
+            progress,
+            live=live,
+            card=None,
+            prefix=[],
+            use_swarm=False,
+            deep=swarm.swarm_reason(q, "question") is not None,
         )
         if not used:  # ИИ не ответил — хотя бы справка из словаря
             verdict = glossary.render(terms) if terms else "🤖 ИИ сейчас не ответил — попробуй ещё раз через минуту."
@@ -518,6 +529,7 @@ class Analyzer:
         card: Card | None = None,
         prefix: list[str] | None = None,
         use_swarm: bool = True,
+        deep: bool = False,
         extra: dict | None = None,
     ) -> tuple[str, bool, list[swarm.AgentResult], str | None]:
         """Рой агентов (если включён) → итог главного аналитика → или вывод по правилам.
@@ -584,6 +596,7 @@ class Analyzer:
                         skills,
                         agents=answered or None,
                         on_text=on_text,
+                        task="deep" if deep or answered else "quick",
                     )
                 except Exception:  # noqa: BLE001
                     log.exception("LLM verdict failed")

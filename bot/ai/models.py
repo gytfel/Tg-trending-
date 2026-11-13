@@ -71,7 +71,7 @@ def _rank(model: str) -> tuple:
     return (-score, version, low)
 
 
-async def list_models(http: Http, hub: AIHub, provider: str) -> list[str]:
+async def list_models(http: Http, hub: AIHub, provider: str, *, vision: bool = False) -> list[str]:
     """Названия моделей, которые провайдер отдаёт по ключу; бросает HttpError, если не ответил."""
     if provider == "anthropic":
         d = await http.get_json(
@@ -100,6 +100,8 @@ async def list_models(http: Http, hub: AIHub, provider: str) -> list[str]:
     rows = _rows(d)
     if provider == "openrouter":  # только бесплатные и только те, что отвечают текстом
         rows = [r for r in rows if (str(r.get("id", "")).endswith(":free") or _free(r)) and _text_out(r)]
+        if vision:
+            rows = [r for r in rows if "image" in ((r.get("architecture") or {}).get("input_modalities") or [])]
     return [str(r["id"]).removeprefix("models/") for r in rows if r.get("id") and r.get("active", True) is not False]
 
 

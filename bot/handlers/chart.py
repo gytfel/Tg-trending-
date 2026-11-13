@@ -17,7 +17,7 @@ from aiogram.utils.chat_action import ChatActionSender
 
 from bot import keyboards, texts
 from bot.ai import AIError, Image
-from bot.formatting import split_message
+from bot.formatting import esc, split_message
 from bot.handlers.analyze import _brand, run_analysis
 from bot.handlers.common import safe_edit
 from bot.handlers.draft import Draft, drafts_available
@@ -131,7 +131,10 @@ async def _answer(message: Message, bot: Bot, svc: Services, file, media: str, c
 
     kb = keyboards.back()
     if not text:
-        msg = texts.chart_failed(svc.llm.vision_ref.short, error or "пустой ответ")
+        if svc.llm.vision_ref.provider == "auto":
+            msg = f"😵 Не удалось разобрать скриншот ({esc(error or 'пустой ответ')}). Запас не списан."
+        else:
+            msg = texts.chart_failed(svc.llm.vision_ref.short, error or "пустой ответ")
         if live is not None and live.started:
             await live.finish(msg, msg, kb)
         elif thinking.message is not None:

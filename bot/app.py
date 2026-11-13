@@ -53,7 +53,7 @@ ADMIN_COMMANDS = [
     BotCommand(command="stats", description="Статистика (админ)"),
     BotCommand(command="emoji", description="Свой эмодзи-логотип для меню (админ)"),
     BotCommand(command="channels", description="Новостные Telegram-каналы (админ)"),
-    BotCommand(command="models", description="Выбрать модель ИИ (админ)"),
+    BotCommand(command="models", description="Автовыбор и модели ИИ (админ)"),
 ]
 
 
@@ -65,9 +65,9 @@ async def build_services(settings: Settings) -> Services:
     announcements.set_overrides(await db.tg_channel_overrides())  # каналы, добавленные через /channels
     http = Http(timeout=settings.source_timeout, limit=settings.http_concurrency)
     hub = build_hub(settings)
-    # модель, выбранная админом в /models, важнее LLM_MODEL из .env
+    # Режим или модель, выбранные в /models, важнее LLM_MODEL из .env.
     model = await db.get_kv("llm_model") or settings.llm_model
-    llm = LLM(hub, model, settings.llm_effort, settings.bot_name, settings.vision_model)
+    llm = LLM(hub, model, settings.llm_effort, settings.bot_name, settings.vision_model, http=http)
     swarm = Swarm(
         hub,
         default_model=settings.swarm_agent_model,

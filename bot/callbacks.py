@@ -31,7 +31,7 @@ class ReportCb(CallbackData, prefix="rp"):
 
 
 class ModelCb(CallbackData, prefix="mdl"):
-    action: str  # use | env | list
+    action: str  # use | auto | env | list
     i: int = 0  # номер модели в последнем списке /models
 
 

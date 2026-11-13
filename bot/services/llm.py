@@ -1,7 +1,6 @@
 """Главный аналитик: итоговый вывод по данным (и по выводам роя агентов, если он включён).
 
-Модель задаётся в LLM_MODEL («claude-opus-5-5» или «провайдер:модель»).
-Без ключа к этой модели сервис выключен, и бот пишет вывод по простым правилам.
+LLM_MODEL=auto подбирает модель по задаче. Для ручного выбора можно указать модель явно.
 """
 
 from __future__ import annotations
@@ -10,11 +9,16 @@ import json
 import logging
 import re
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from bot.ai import AIError, AIHub, Image, ModelRef
+from bot.ai.providers import Refused
+from bot.ai.routing import ModelRouter, Task
 from bot.db import Skill
 from bot.formatting import esc
+
+if TYPE_CHECKING:
+    from bot.sources.http import Http
 
 log = logging.getLogger(__name__)
 
@@ -68,8 +72,18 @@ def _json(data: Any) -> str:
 
 
 class LLM:
-    def __init__(self, hub: AIHub, model: str, effort: str | None, bot_name: str, vision_model: str = "") -> None:
+    def __init__(
+        self,
+        hub: AIHub,
+        model: str,
+        effort: str | None,
+        bot_name: str,
+        vision_model: str = "",
+        *,
+        http: Http | None = None,
+    ) -> None:
         self.hub = hub
+        self.router = ModelRouter(hub, http) if http is not None else None
         self.ref = ModelRef.parse(model)
         # скриншоты читает отдельная модель, если задана (VISION_MODEL), иначе — главный аналитик
         self._own_vision = bool(vision_model.strip())
@@ -88,12 +102,72 @@ class LLM:
         return self.ref.model
 
     @property
+    def automatic(self) -> bool:
+        return self.ref.provider == "auto"
+
+    @property
     def enabled(self) -> bool:
+        if self.automatic:
+            return self.router is not None and self.router.available()
         return self.hub.available(self.ref)
 
     @property
     def vision_enabled(self) -> bool:
+        if self.vision_ref.provider == "auto":
+            return self.router is not None and self.router.available("vision")
         return self.hub.available(self.vision_ref)
+
+    async def _generate(
+        self,
+        ref: ModelRef,
+        task: Task,
+        system: str,
+        prompt: str,
+        *,
+        max_tokens: int,
+        on_text: OnText | None,
+        image: Image | None = None,
+    ) -> str:
+        router = self.router if ref.provider == "auto" else None
+        refs = await router.routes(task) if router is not None else [ref]
+        if not refs:
+            kind = " для скриншотов" if task == "vision" else " для этой задачи"
+            raise AIError(f"нет доступной модели{kind}")
+        options = {"images": [image]} if image is not None else {}
+        last_error = AIError("пустой ответ")
+        for candidate in refs:
+            if router is not None and not router.eligible(candidate):
+                continue
+            text = ""
+            try:
+                if on_text is None and image is None:
+                    text = await self.hub.complete(candidate, system, prompt, max_tokens=max_tokens, effort=self.effort)
+                else:
+                    async for piece in self.hub.stream(
+                        candidate, system, prompt, max_tokens=max_tokens, effort=self.effort, **options
+                    ):
+                        text += piece
+                        if on_text is not None:
+                            try:
+                                await on_text(text)
+                            except Exception:  # noqa: BLE001 — показ в Telegram не должен обрывать модель
+                                log.debug("on_text failed", exc_info=True)
+                if text.strip():
+                    if router is not None:
+                        log.info("автовыбор ИИ (%s): %s", task, candidate)
+                    return text.strip()
+                raise AIError("пустой ответ")
+            except Refused:
+                raise
+            except AIError as e:
+                if router is None:
+                    raise
+                router.record_failure(candidate, e)
+                log.warning("автовыбор ИИ (%s): %s — %s", task, candidate, e)
+                if text and on_text is not None:
+                    raise
+                last_error = e
+        raise last_error
 
     async def chart(self, image: Image, question: str, facts: str = "", on_text: OnText | None = None) -> str | None:
         """Разбор скриншота графика. facts — свежие данные бота по монете из подписи (если есть).
@@ -105,17 +179,9 @@ class LLM:
         if facts:
             parts.append(f"Свежие данные бота по монете (цифры бирж сейчас):\n{facts}")
         prompt = "\n\n".join(parts)
-        text = ""
-        async for piece in self.hub.stream(
-            self.vision_ref, system, prompt, max_tokens=4000, effort=self.effort, images=[image]
-        ):
-            text += piece
-            if on_text is not None:
-                try:
-                    await on_text(text)
-                except Exception:  # noqa: BLE001 — показ в Telegram не должен обрывать ответ модели
-                    log.debug("on_text failed", exc_info=True)
-        return text.strip() or None
+        return await self._generate(
+            self.vision_ref, "vision", system, prompt, max_tokens=4000, on_text=on_text, image=image
+        )
 
     @staticmethod
     def build_prompt(
@@ -140,6 +206,8 @@ class LLM:
         skills: list[Skill],
         agents: list[dict[str, Any]] | None = None,
         on_text: OnText | None = None,
+        *,
+        task: Task = "quick",
     ) -> str | None:
         """Итоговый ответ. С on_text — потоком: on_text(весь текст на данный момент) по мере генерации."""
         if not self.enabled:
@@ -147,16 +215,7 @@ class LLM:
         system = SYSTEM_PROMPT.format(bot_name=self.bot_name) + (SWARM_ADDON if agents else "")
         prompt = self.build_prompt(question, context, skills, agents)
         try:
-            if on_text is None:
-                return await self.hub.complete(self.ref, system, prompt, max_tokens=16000, effort=self.effort)
-            text = ""
-            async for piece in self.hub.stream(self.ref, system, prompt, max_tokens=16000, effort=self.effort):
-                text += piece
-                try:
-                    await on_text(text)
-                except Exception:  # noqa: BLE001 — показ в Telegram не должен обрывать ответ модели
-                    log.debug("on_text failed", exc_info=True)
-            return text.strip() or None
+            return await self._generate(self.ref, task, system, prompt, max_tokens=16000, on_text=on_text)
         except AIError as e:
             log.warning("главный аналитик (%s) не ответил: %s", self.ref, e)
             return None
