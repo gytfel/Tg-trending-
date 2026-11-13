@@ -8,6 +8,7 @@ from bot.db import Database
 from bot.services.newswatch import NewsWatcher
 from bot.sources.base import Asset, Ctx
 from bot.sources.providers import announcements as ann
+from bot.sources.providers import news
 from bot.sources.providers.news import FEEDS, feed_items
 from tests.conftest import FakeHttp
 from tests.test_newswatch import Bot, rss
@@ -15,6 +16,17 @@ from tests.test_newswatch import Bot, rss
 NOW = datetime.now(UTC)
 MS = int((NOW - timedelta(minutes=5)).timestamp() * 1000)
 XYZ = Asset(symbol="XYZ", name="Xyzcoin")
+
+
+@pytest.fixture
+def fixture_news_clock(monkeypatch):
+    class FixtureDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 11, 10, 12, tzinfo=UTC).astimezone(tz)
+
+    monkeypatch.setattr(news, "datetime", FixtureDateTime)
+
 
 BINANCE = {
     "code": "000000",
@@ -163,7 +175,7 @@ def test_channels_from_env(monkeypatch):
     assert ann.channels() == ["forklog", "incrypted"]  # дубли и мусор отброшены
 
 
-async def test_telegram_source(registry, monkeypatch):
+async def test_telegram_source(registry, monkeypatch, fixture_news_clock):
     monkeypatch.setenv("NEWS_TG_CHANNELS", "forklog,deadchannel")
     http = FakeHttp().add("t.me/s/forklog", TG_PAGE)  # второй канал — 404, не мешает
     items = await registry.get("telegram_channels").fetcher(Ctx(http=http, asset=XYZ))
@@ -173,7 +185,7 @@ async def test_telegram_source(registry, monkeypatch):
 # --- ключевые API ----------------------------------------------------------------------------------
 
 
-async def test_newsdata(registry):
+async def test_newsdata(registry, fixture_news_clock):
     http = FakeHttp().add(
         "newsdata.io/api/1/crypto",
         {
@@ -205,7 +217,7 @@ async def test_finnhub(registry):
     assert [n.source for n in items] == ["Reuters"]  # общая лента — по монете оставили одну
 
 
-async def test_gnews(registry):
+async def test_gnews(registry, fixture_news_clock):
     http = FakeHttp().add(
         "gnews.io/api/v4/search",
         {"articles": [{"title": "Xyzcoin rally", "url": "https://gn/1", "publishedAt": "2026-11-10T08:00:00Z",
@@ -311,7 +323,7 @@ def test_x_accounts_from_env(monkeypatch):
     assert twitter.accounts() == ["tier10k", "WatcherGuru"]
 
 
-async def test_x_official_api(registry):
+async def test_x_official_api(registry, fixture_news_clock):
     http = FakeHttp().add(
         "api.x.com/2/tweets/search/recent",
         {
@@ -340,7 +352,7 @@ async def test_x_official_empty_is_no_data(registry):
         await registry.get("x_twitter").fetcher(Ctx(http=http, asset=XYZ, key="TOKEN"))
 
 
-async def test_twitterapi_io(registry):
+async def test_twitterapi_io(registry, fixture_news_clock):
     http = FakeHttp().add(
         "api.twitterapi.io/twitter/tweet/advanced_search",
         {

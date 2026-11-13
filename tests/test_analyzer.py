@@ -170,9 +170,11 @@ class StubLLM:
 
     def __init__(self):
         self.seen = None
+        self.task = None
 
-    async def verdict(self, question, context, skills, agents=None, on_text=None):
+    async def verdict(self, question, context, skills, agents=None, on_text=None, *, task="quick"):
         self.seen = (question, context, skills)
+        self.task = task
         return "**Импульс** сильный <script>\n• держим"
 
 
@@ -183,6 +185,7 @@ async def test_llm_verdict_is_used_and_escaped(registry):
     q = parse_query("BTC навык мой стиль", ["мой стиль"])
     res = await Analyzer(btc_http(), reg, llm, deadline=3).analyze(q, [skill])
     assert res.used_llm
+    assert llm.task == "deep"
     assert "🤖 <b>Вывод</b> · навык: мой стиль" in res.text
     assert "<b>Импульс</b> сильный &lt;script&gt;" in res.text
     q, ctx, skills = llm.seen
@@ -201,7 +204,7 @@ async def test_builtin_skill_goes_to_ai_with_bot_numbers(registry):
     res = await Analyzer(btc_http(), reg, llm, deadline=3).analyze(q, [])
     _, _, skills = llm.seen
     assert [s.name for s in skills] == ["риск"]
-    assert skills[0].content.startswith("Помоги с риск-менеджментом") and "Депозит $2" in skills[0].content
+    assert skills[0].content.startswith("Ты — риск-менеджер") and "Депозит $2" in skills[0].content
     assert "⚖️ <b>Риск · BTC</b>" in res.text and "🤖 <b>Вывод</b> · навык: риск" in res.text
     assert res.caption.startswith("🧠 Навык: риск")  # с ИИ подпись пишет модель
 
@@ -211,9 +214,9 @@ class CountingLLM(StubLLM):
         super().__init__()
         self.calls = 0
 
-    async def verdict(self, question, context, skills, agents=None, on_text=None):
+    async def verdict(self, question, context, skills, agents=None, on_text=None, *, task="quick"):
         self.calls += 1
-        return await super().verdict(question, context, skills, agents, on_text)
+        return await super().verdict(question, context, skills, agents, on_text, task=task)
 
 
 async def test_ai_answer_cache(registry, monkeypatch):
@@ -221,10 +224,11 @@ async def test_ai_answer_cache(registry, monkeypatch):
     llm = CountingLLM()
     an = Analyzer(btc_http(), reg, llm, deadline=3, ai_cache_seconds=180)
     first = await an.analyze(parse_query("разбери  BTC"), [])
+    assert llm.task == "quick"
     second = await an.analyze(parse_query("Разбери BTC"), [])  # регистр и пробелы не важны
     assert llm.calls == 1 and first.caption == second.caption and second.used_llm
     await an.analyze(parse_query("стоит ли брать BTC"), [])  # другой вопрос — новый ответ
-    assert llm.calls == 2
+    assert llm.calls == 2 and llm.task == "deep"
     clock = time.monotonic() + 181
     monkeypatch.setattr("bot.services.analyzer.time.monotonic", lambda: clock)
     await an.analyze(parse_query("разбери BTC"), [])  # прошло 3 минуты — ответ устарел

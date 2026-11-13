@@ -16,7 +16,7 @@ from bot.db import Skill
 from bot.formatting import esc, short_addr
 from bot.query_parser import ParsedQuery
 from bot.render import Card
-from bot.services import cards, glossary, prose, report, skills_builtin, swarm, ta
+from bot.services import cards, glossary, prose, report, skills_builtin, stocks, swarm, ta
 from bot.services.llm import LLM, to_html
 from bot.services.progress import Progress
 from bot.services.swarm import Swarm
@@ -33,7 +33,7 @@ EXPLAIN_NOTE = (
     "Это вопрос о понятии или механике рынка, а не о конкретной монете. Объясни своими знаниями простыми "
     "словами: что это, почему возникает, короткий пример с цифрами, как трейдеру это использовать и чем "
     "опасно. Цифры о текущем рынке бери только из данных — одной-двумя фразами свяжи объяснение с рынком "
-    "сейчас, если в данных есть что-то по теме. До 1000 символов."
+    "сейчас, если в данных есть что-то по теме. Объём — как просит пользователь; если не просит — 2–4 абзаца."
 )
 
 
@@ -205,24 +205,43 @@ class Analyzer:
         progress = progress if progress is not None else Progress()
 
         targets = q.targets
+        # «почему упали акции Nvidia», «что с Nasdaq», «ставка ФРС» — вопрос про фондовый рынок:
+        # тикер акции («NVDA») — не монета
+        topic = stocks.detect(q.raw)
+        if topic is not None:
+            targets = [(k, v) for k, v in targets if not (k == "symbol" and v.upper() in topic.tickers)]
         # встроенные навыки (новости, перегрев, риск…) бот считает сам — они работают и без ИИ
         builtins = skills_builtin.find(q.skills, q.raw)
         ai_on = self.llm.enabled or (self.swarm is not None and self.swarm.enabled)
         # «что такое сквиз лонгов», «объясни фандинг» — вопрос о понятии, а не о монете: отвечает ИИ
-        if not targets and not q.market and not q.skills and self.llm.enabled and glossary.is_explain(q.raw):
+        explain = not targets and not q.market and not q.skills and topic is None and glossary.is_explain(q.raw)
+        if explain and self.llm.enabled:
             return await self._explain(q, skills, progress, live, t0)
         # «навык новости» без монеты — про рынок в целом
-        overview = not targets and (q.market or bool(builtins) or (ai_on and q.words >= 3))
+        overview = not targets and (q.market or bool(builtins) or topic is not None or (ai_on and q.words >= 3))
         if not targets and not overview:
             return AnalysisResult(kind="nothing", text="")
         skill_text = "\n".join([q.raw, *(s.content for s in skills)])  # депозит, риск, стоп для «риска»
         await progress.step("🧩", describe_task(q, skills_builtin.for_ai(skills, builtins, {})))
 
         if overview:
+            stock_task = None
+            if topic is not None:  # котировки и новости по теме — параллельно со сбором фона рынка
+                await progress.step("📈", f"Фондовый рынок: котировки и новости — {topic.title}")
+                stock_task = asyncio.create_task(stocks.gather(self.http, topic))
             (g,) = await self._collect_all([(self.registry.for_overview(), None)], progress)
-            body = report.overview_section(g)
-            news = report.news_block(g, limit=5)
-            card = cards.build_card("overview", [], g)
+            td = None
+            if stock_task is not None:
+                try:
+                    td = await stock_task
+                except Exception:  # noqa: BLE001 — без котировок ответим обзором
+                    log.exception("stocks failed")
+            if td is not None:
+                # вопрос про акции: сначала они, крипта — одной строкой фона; картинка крипторынка не к месту
+                stock_block, body, news, card = stocks.render(td), report.market_line(g), "", None
+            else:
+                stock_block, body = "", report.overview_section(g)
+                news, card = report.news_block(g, limit=5), cards.build_card("overview", [], g)
             blocks = skills_builtin.run(builtins, skills_builtin.SkillInput("overview", [], g, skill_text))
             ai_skills = skills_builtin.for_ai(skills, builtins, blocks)
             verdict, used, agents, ai_html = await self._verdict(
@@ -233,16 +252,25 @@ class Analyzer:
                 progress,
                 live=live,
                 card=card,
-                prefix=[body, news, *blocks.values()],
-                use_swarm=self._use_swarm(q, "overview", skills),
+                prefix=[stock_block, body, news, *blocks.values()],
+                use_swarm=td is None and self._use_swarm(q, "overview", skills),
+                deep=topic is not None or swarm.swarm_reason(q, "overview", bool(skills)) is not None,
+                extra={"stock_market": stocks.context(td)} if td is not None else None,
+            )
+            hint = (
+                "<i>Почему именно — объяснит ИИ: с ключом ИИ он сведёт котировки и заголовки в ответ.</i>"
+                if td is not None and not ai_on
+                else ""
             )
             text = "\n\n".join(
                 p
                 for p in (
+                    stock_block,
                     body,
                     news,
                     *blocks.values(),
                     verdict,
+                    hint,
                     report.footer(g.ok_count(), g.asked, time.monotonic() - t0),
                 )
                 if p
@@ -311,6 +339,7 @@ class Analyzer:
             card=card,
             prefix=list(sections),
             use_swarm=self._use_swarm(q, kind, skills),
+            deep=swarm.swarm_reason(q, kind, bool(skills)) is not None,
         )
         if verdict:
             sections.append(verdict)
@@ -352,7 +381,16 @@ class Analyzer:
             note += "\n\nСправка бота (опора, не противоречь ей):\n" + "\n".join(f"{t.title}: {t.text}" for t in terms)
         asked = dataclasses.replace(q, raw=f"{q.raw}\n\n({note})")
         verdict, used, agents, ai_html = await self._verdict(
-            asked, [], g, skills, progress, live=live, card=None, prefix=[], use_swarm=False
+            asked,
+            [],
+            g,
+            skills,
+            progress,
+            live=live,
+            card=None,
+            prefix=[],
+            use_swarm=False,
+            deep=swarm.swarm_reason(q, "question") is not None,
         )
         if not used:  # ИИ не ответил — хотя бы справка из словаря
             verdict = glossary.render(terms) if terms else "🤖 ИИ сейчас не ответил — попробуй ещё раз через минуту."
@@ -491,6 +529,8 @@ class Analyzer:
         card: Card | None = None,
         prefix: list[str] | None = None,
         use_swarm: bool = True,
+        deep: bool = False,
+        extra: dict | None = None,
     ) -> tuple[str, bool, list[swarm.AgentResult], str | None]:
         """Рой агентов (если включён) → итог главного аналитика → или вывод по правилам.
 
@@ -551,7 +591,12 @@ class Analyzer:
             else:
                 try:
                     text = await self.llm.verdict(
-                        q.raw, report.llm_context(snaps, g), skills, agents=answered or None, on_text=on_text
+                        q.raw,
+                        {**report.llm_context(snaps, g), **(extra or {})},
+                        skills,
+                        agents=answered or None,
+                        on_text=on_text,
+                        task="deep" if deep or answered else "quick",
                     )
                 except Exception:  # noqa: BLE001
                     log.exception("LLM verdict failed")

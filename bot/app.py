@@ -14,7 +14,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeChat
 from dotenv import load_dotenv
 
-from bot.ai import AIHub
+from bot.ai import AIHub, diagnose
 from bot.config import Settings
 from bot.db import Database
 from bot.handlers import build_router
@@ -53,6 +53,7 @@ ADMIN_COMMANDS = [
     BotCommand(command="stats", description="Статистика (админ)"),
     BotCommand(command="emoji", description="Свой эмодзи-логотип для меню (админ)"),
     BotCommand(command="channels", description="Новостные Telegram-каналы (админ)"),
+    BotCommand(command="models", description="Автовыбор и модели ИИ (админ)"),
 ]
 
 
@@ -64,7 +65,9 @@ async def build_services(settings: Settings) -> Services:
     announcements.set_overrides(await db.tg_channel_overrides())  # каналы, добавленные через /channels
     http = Http(timeout=settings.source_timeout, limit=settings.http_concurrency)
     hub = build_hub(settings)
-    llm = LLM(hub, settings.llm_model, settings.llm_effort, settings.bot_name, settings.vision_model)
+    # Режим или модель, выбранные в /models, важнее LLM_MODEL из .env.
+    model = await db.get_kv("llm_model") or settings.llm_model
+    llm = LLM(hub, model, settings.llm_effort, settings.bot_name, settings.vision_model, http=http)
     swarm = Swarm(
         hub,
         default_model=settings.swarm_agent_model,
@@ -146,6 +149,10 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True),
     )
     dp = build_dispatcher(svc)
+    if not svc.llm.enabled and svc.hub is not None:
+        # без этого «ИИ выключен» в боте приходится угадывать: пишем причину в лог при запуске
+        spec = svc.llm.ref.spec
+        log.warning("ИИ (главный аналитик) выключен: %s", " ".join(diagnose.explain(svc.hub, spec)))
     watcher = asyncio.create_task(Watcher(bot, svc.db, svc.prices, settings.watch_interval).run())
     news = asyncio.create_task(
         NewsWatcher(bot, svc.db, svc.http, svc.prices, interval=settings.news_watch_interval).run()

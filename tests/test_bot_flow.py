@@ -38,7 +38,7 @@ from aiogram.types import (
     User,
 )
 
-from bot.ai import AIHub
+from bot.ai import AIError, AIHub
 from bot.app import build_dispatcher
 from bot.config import Settings
 from bot.db import Database
@@ -232,6 +232,7 @@ def dispatcher():
 async def make_env(registry, dispatcher, hub=None, **overrides):
     overrides.setdefault("stream_answers", False)  # печать проверяем отдельными тестами
     overrides.setdefault("stream_drafts", False)  # правками — как в группах; черновики — своими тестами
+    overrides.setdefault("llm_model", "claude-opus-5-5")  # закреплённая модель для тестов ручного выбора
     tg_draft.reset_support()
     from bot.handlers import menu as menu_handlers
 
@@ -243,7 +244,7 @@ async def make_env(registry, dispatcher, hub=None, **overrides):
     for sid in ("binance", "coingecko", "fear_greed", "coingecko_markets", "binance_klines"):
         reg.add(registry.get(sid))
     http = api()
-    llm = LLM(hub or AIHub({}), "claude-opus-5-5", "medium", "Trending")
+    llm = LLM(hub or AIHub({}), settings.llm_model, "medium", "Trending", http=http)
     svc = Services(
         settings=settings,
         db=db,
@@ -407,6 +408,64 @@ async def test_profile_help_sources(env):
     assert add.text == "➕ Добавить в чат" and add.url == "https://t.me/trending_test_bot?startgroup=true"
     assert "💬 Поддержка" not in session.buttons()  # SUPPORT_URL не задан
     assert "🔌 Источники данных" not in session.buttons() and "/sources" not in help_text  # не админ
+
+
+async def test_stats_explains_why_ai_is_off(registry, dispatcher):
+    hub = AIHub({"OPENROUTER_API_KEY": "sk-or"})  # ключ OpenRouter, а модель по умолчанию — Claude
+    session, feed, svc = await make_env(registry, dispatcher, admin_ids=str(UID))
+    svc.hub = hub
+    try:
+        await feed(msg("/stats"))
+        text = session.last().text
+        assert "🤖 ИИ: выключен" in text and "нужен ANTHROPIC_API_KEY, а он пустой" in text
+        assert "OpenRouter → LLM_MODEL=openrouter:" in text and "sk-or" not in text
+    finally:
+        await svc.db.close()
+
+
+class PickyHub(AIHub):
+    """Отвечает только Gemini flash; остальные модели падают."""
+
+    def __init__(self):
+        super().__init__({"GEMINI_API_KEY": "g", "GROQ_API_KEY": "q"})
+
+    async def complete(self, ref, system, prompt, **kw):
+        if ref.model != "gemini-9.0-flash":
+            raise AIError("HTTP 404 model not found")
+        return "ок"
+
+
+async def test_models_pick_and_persist(registry, dispatcher):
+    from tests.test_ai_models import model_http
+
+    hub = PickyHub()
+    session, feed, svc = await make_env(registry, dispatcher, hub=hub, admin_ids=str(UID))
+    svc.hub = hub
+    svc.http.routes[:0] = model_http().routes
+    try:
+        await feed(msg("/models"))
+        text = session.last().text
+        assert "Сейчас: <code>claude-opus-5-5</code> — ⚪ выключен" in text and "нужен ANTHROPIC_API_KEY" in text
+        buttons = session.buttons()
+        assert buttons[0] == "Gemini · gemini-9.0-flash" and "Groq · llama-9.3-70b-versatile" in buttons
+
+        await feed(cb(session.button_data("Groq · llama-9.3-70b-versatile")))  # не ответила — не включаем
+        assert any("не ответила" in t for t in session.texts()) and svc.llm.ref.spec == "claude-opus-5-5"
+
+        await feed(cb(session.button_data("Gemini · gemini-9.0-flash")))
+        assert any("✅ ИИ включён: <code>gemini:gemini-9.0-flash</code>" in t for t in session.texts())
+        assert svc.llm.enabled and svc.llm.ref.spec == "gemini:gemini-9.0-flash"
+        assert await svc.db.get_kv("llm_model") == "gemini:gemini-9.0-flash"  # переживёт перезапуск
+        assert "✅ Gemini · gemini-9.0-flash" in session.buttons() and "↩️ Как в .env" in session.buttons()
+
+        await feed(cb(session.button_data("Автовыбор по задаче")))
+        assert svc.llm.enabled and svc.llm.automatic and await svc.db.get_kv("llm_model") == "auto"
+        assert "✅ Автовыбор по задаче" in session.buttons()
+
+        await feed(cb(session.button_data("↩️ Как в .env")))
+        assert svc.llm.ref.spec == "claude-opus-5-5" and await svc.db.get_kv("llm_model") is None
+    finally:
+        await svc.db.close()
 
 
 async def test_sources_screen_is_admin_only(registry, dispatcher):
@@ -945,6 +1004,77 @@ async def test_screener_in_group_replies(screener_env):
     await feed(msg("@trending_test_bot что растёт", GROUP))
     last = session.last()
     assert last.chat_id == GROUP.id and last.reply_parameters is not None and "Скринер · рост" in last.text
+
+
+# --- вопросы про акции и фондовый рынок ----------------------------------------------------------------
+
+
+async def test_stock_question_without_ai(registry, dispatcher):
+    from tests.stocks_fixtures import add_routes
+
+    session, feed, svc = await make_env(registry, dispatcher, report_style="card")
+    add_routes(svc.http)
+    try:
+        await feed(msg("почему акции Nvidia упали и весь фондовый рынок ?"))
+        text = session.last().text
+        assert text.startswith("📈 <b>Фондовый рынок · Nvidia</b>\nNvidia <b>$162.40</b> (−7.8%)")
+        assert "Jensen Huang resigns as Nvidia CEO" in text and "Nasdaq <b>21" in text
+        assert "объяснит ИИ" in text  # без ключа ИИ — честно, кто объяснит «почему»
+        assert not [r for r in session.requests if isinstance(r, SendPhoto)]  # картинка крипторынка не к месту
+    finally:
+        await svc.db.close()
+
+
+async def test_stock_question_goes_to_ai_with_quotes_and_news(registry, dispatcher):
+    from tests.stocks_fixtures import add_routes
+
+    hub = TeacherHub()
+    session, feed, svc = await make_env(registry, dispatcher, hub=hub, report_style="card")
+    add_routes(svc.http)
+    try:
+        await feed(msg("NVDA упала почему"))  # тикер акции — не монета
+        prompt = hub.prompts[-1]
+        assert "stock_market" in prompt and "Jensen Huang resigns" in prompt and '"NVDA"' in prompt
+        text = session.last().text
+        assert "📈 <b>Фондовый рынок · Nvidia</b>" in text and "🤖 <b>Вывод</b>" in text
+        assert "объяснит ИИ" not in text
+    finally:
+        await svc.db.close()
+
+
+# --- длинный ответ ИИ: без лимита, несколькими сообщениями --------------------------------------------
+
+
+class LongHub(AIHub):
+    """ИИ, который по просьбе пишет очень подробно — ответ длиннее подписи и одного сообщения."""
+
+    def __init__(self):
+        super().__init__({"ANTHROPIC_API_KEY": "k"})
+        self.system = ""
+
+    async def complete(self, ref, system, prompt, **kw):
+        self.system = system
+        return "\n\n".join(f"Пункт {i}: " + "подробный разбор фактора " * 14 for i in range(30))
+
+    async def stream(self, ref, system, prompt, **kw):
+        yield await self.complete(ref, system, prompt, **kw)
+
+
+async def test_long_ai_answer_is_not_cut(registry, dispatcher):
+    hub = LongHub()
+    session, feed, svc = await make_env(registry, dispatcher, hub=hub, report_style="card")
+    try:
+        await feed(msg("разбери BTC максимально подробно"))
+        assert "до 850 символов" not in hub.system and "жёсткого лимита длины нет" in hub.system
+        photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+        assert photo.caption == "👇 Ответ — ниже"  # в подпись не влез — картинка сверху, текст под ней
+        texts_ = [r.text for r in session.requests if isinstance(r, (SendMessage, EditMessageText)) and r.text]
+        joined = "\n".join(texts_)
+        assert "Пункт 0:" in joined and "Пункт 29:" in joined  # ответ целиком, без обрезки
+        assert all(len(t) <= 4096 for t in texts_)
+        assert session.last().reply_markup is not None  # кнопки — на последнем сообщении
+    finally:
+        await svc.db.close()
 
 
 # --- вопросы без монеты: словарь и ИИ ----------------------------------------------------------------

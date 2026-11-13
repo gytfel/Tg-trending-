@@ -92,15 +92,53 @@ async def test_card_mode_streams_caption_and_finishes_with_buttons():
     assert log[-1] == ("caption", "🐝 Рой…\n\nBTC <b>держится</b> у $100K.", "KB") and sent.name == "photo"
 
 
-async def test_long_answer_gets_its_own_message():
+async def test_long_answer_moves_below_card():
     live, log, _, clock = make()
     await live.begin(CARD)
     clock.t += 1
-    await live.update("слово " * 400)  # длиннее подписи — показываем начало
-    shown = [e for e in log if e[0] == "caption"][-1][1]
-    assert shown.endswith("…" + " ▍") or shown.endswith(" … ▍")
+    await live.update("слово " * 400)  # длиннее подписи — подпись «ответ ниже», текст сообщением под картинкой
+    assert ("caption", "👇 Ответ — ниже", None) in log and live.mode == "card_text"
+    assert ("new", "✍️", None) in log and log[-1][0] == "text" and log[-1][1].endswith("▍")
     sent = await live.finish("слово " * 400, "отчёт", "KB")
-    assert sent.name == "new" and log[-1][0] == "new" and log[-1][2] == "KB"
+    assert sent.name == "new" and log[-1] == ("text", "слово " * 400, "KB")
+
+
+def paragraphs(n: int) -> str:
+    return "\n\n".join(f"Абзац {i}: " + "длинный разбор рынка " * 12 for i in range(n))
+
+
+async def test_very_long_answer_rolls_over_into_new_messages():
+    live, log, thinking, clock = make(card_style=False)
+    await live.begin(CARD, "", "🤖 <b>Вывод</b>\n")
+    body = paragraphs(60)  # ~16 000 символов — четыре сообщения Telegram
+    for k in range(1, 61):
+        clock.t += 1
+        await live.update(body[: len(body) * k // 60])
+    assert len(live.msgs) >= 4  # печать продолжалась в новых сообщениях, а не встала на 4096
+    sent = await live.finish("", "🤖 <b>Вывод</b>\n" + body, "KB")
+    last_texts = [e for e in log if e[0] == "text"][-len(live.msgs) :]
+    assert all(len(t) <= 4096 for _, t, _ in last_texts)
+    assert log[-1][2] == "KB" and sent is live.msgs[-1]
+    assert "Абзац 59" in log[-1][1] and not log[-1][1].endswith("▍")
+
+
+async def test_draft_shows_the_part_being_written(monkeypatch):
+    shown = []
+
+    class FakeDraft:
+        async def show(self, text):
+            shown.append(text)
+
+    live, log, thinking, clock = make(card_style=False)
+    live.draft = FakeDraft()
+    await live.begin(CARD, "", "🤖 <b>Вывод</b>\n")
+    body = paragraphs(40)
+    clock.t += 1
+    await live.update(body)
+    assert "Абзац 39" in shown[-1] and "Абзац 0:" not in shown[-1]  # в черновике — дописываемая часть
+    await live.finish("", "🤖 <b>Вывод</b>\n" + body, "KB")
+    sent = [e for e in log if e[0] == "new"]
+    assert len(sent) >= 2 and "Абзац 0:" in sent[0][1] and sent[-1][2] == "KB"  # в конце — все части по порядку
 
 
 async def test_without_card_writes_into_thinking_message():

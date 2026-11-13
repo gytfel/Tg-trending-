@@ -137,7 +137,7 @@ async def test_live_long_text_goes_under_the_card():
     live, log, _, _ = make_live()
     await live.begin(CARD)
     await live.finish("слово " * 400, "отчёт", "KB")  # длиннее подписи
-    assert log[0] == ("photo", None, None)  # картинка сверху
+    assert log[0] == ("photo", "👇 Ответ — ниже", None)  # картинка сверху
     assert log[-1][0] == "new" and log[-1][2] == "KB"  # текст следом, кнопки на нём
 
 

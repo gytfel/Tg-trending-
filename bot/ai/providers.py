@@ -54,7 +54,15 @@ MAX_TOKENS_PARAM = {"openai": "max_completion_tokens"}
 
 
 class AIError(Exception):
-    """Провайдер не дал ответ (сеть, лимиты, неверный ключ…). Сообщение — коротко, для лога и UI."""
+    """Провайдер не дал ответ (сеть, лимиты, неверный ключ…). Сообщение — коротко, для лога и UI.
+
+    status и body — код и начало ответа провайдера (для /models: показать причину по-человечески).
+    """
+
+    def __init__(self, message: str = "", *, status: int | None = None, body: str = "") -> None:
+        super().__init__(message)
+        self.status = status
+        self.body = body
 
 
 class Refused(AIError):
@@ -81,6 +89,8 @@ class ModelRef:
     @classmethod
     def parse(cls, spec: str) -> ModelRef:
         spec = spec.strip()
+        if spec.lower() == "auto":
+            return cls("auto", "auto")
         head, sep, tail = spec.partition(":")
         if sep and (head == "anthropic" or head in OPENAI_COMPAT):
             return cls(head, tail.strip())
@@ -89,12 +99,17 @@ class ModelRef:
         return cls(head if sep else "", tail if sep else spec)
 
     @property
+    def spec(self) -> str:
+        """Как писать в LLM_MODEL: у Claude — просто название, у остальных — «провайдер:модель»."""
+        return self.model if self.provider in {"anthropic", "auto"} else f"{self.provider}:{self.model}"
+
+    @property
     def short(self) -> str:
         name = self.model.rsplit("/", 1)[-1]
         return name.removeprefix("claude-")
 
     def __str__(self) -> str:
-        return f"{self.provider}:{self.model}"
+        return "auto" if self.provider == "auto" else f"{self.provider}:{self.model}"
 
 
 class Provider(ABC):
@@ -167,16 +182,16 @@ class AnthropicProvider(Provider):
         """Ошибки SDK -> короткий AIError (от частных к общим: 401 → 400 → 429 → прочие → сеть)."""
         if isinstance(e, anthropic.AuthenticationError):
             log.error("Claude: неверный ANTHROPIC_API_KEY")
-            return AIError("неверный ключ")
+            return AIError("неверный ключ", status=e.status_code)
         if isinstance(e, anthropic.BadRequestError):
             log.error("Claude %s: некорректный запрос: %s", model, e.message)
-            return AIError("некорректный запрос")
+            return AIError("некорректный запрос", status=e.status_code)
         if isinstance(e, anthropic.RateLimitError):
             log.warning("Claude %s: rate limit", model)
-            return AIError("лимит запросов")
+            return AIError("лимит запросов", status=e.status_code)
         if isinstance(e, anthropic.APIStatusError):
             log.warning("Claude %s: ошибка API %s: %s", model, e.status_code, e.message)
-            return AIError(f"ошибка API {e.status_code}")
+            return AIError(f"ошибка API {e.status_code}", status=e.status_code)
         log.warning("Claude %s: нет соединения: %r", model, e)
         return AIError("нет соединения")
 
@@ -262,15 +277,21 @@ class OpenAICompatProvider(Provider):
         try:
             async with session.post(f"{self.base_url}/chat/completions", json=body, headers=headers) as resp:
                 if resp.status >= 400:
-                    detail = (await resp.text(errors="replace"))[:300]
+                    detail = (await resp.text(errors="replace"))[:600]
                     log.warning("%s %s: HTTP %s %s", self.name, model, resp.status, detail)
-                    raise AIError(f"HTTP {resp.status}")
+                    raise AIError(f"HTTP {resp.status}", status=resp.status, body=detail)
                 data = await resp.json(content_type=None)
         except (aiohttp.ClientError, TimeoutError) as e:
             log.warning("%s %s: нет соединения: %r", self.name, model, e)
             raise AIError("нет соединения") from e
+        except ValueError as e:
+            raise AIError("неожиданный формат ответа") from e
         try:
-            content = data["choices"][0]["message"].get("content")
+            choice = data["choices"][0]
+            message = choice["message"]
+            if choice.get("finish_reason") == "content_filter" or message.get("refusal"):
+                raise Refused("модель отказалась")
+            content = message.get("content")
         except (KeyError, IndexError, TypeError, AttributeError) as e:
             raise AIError("неожиданный формат ответа") from e
         if isinstance(content, list):  # некоторые API отдают список частей
@@ -298,9 +319,9 @@ class OpenAICompatProvider(Provider):
         try:
             async with session.post(f"{self.base_url}/chat/completions", json=body, headers=headers) as resp:
                 if resp.status >= 400:
-                    detail = (await resp.text(errors="replace"))[:300]
+                    detail = (await resp.text(errors="replace"))[:600]
                     log.warning("%s %s: HTTP %s %s", self.name, model, resp.status, detail)
-                    raise AIError(f"HTTP {resp.status}")
+                    raise AIError(f"HTTP {resp.status}", status=resp.status, body=detail)
                 async for line in resp.content:
                     if piece := _SSE.delta(line):
                         yield piece
@@ -322,7 +343,13 @@ class _SSE:
             return None
         try:
             obj = json.loads(data)
-            return (obj["choices"][0].get("delta") or {}).get("content") or None
+            if isinstance(obj, dict) and obj.get("error"):
+                raise AIError("ошибка в потоке ответа")
+            choice = obj["choices"][0]
+            delta = choice.get("delta") or {}
+            if choice.get("finish_reason") == "content_filter" or delta.get("refusal"):
+                raise Refused("модель отказалась")
+            return delta.get("content") or None
         except (json.JSONDecodeError, KeyError, IndexError, TypeError, AttributeError):
             return None
 

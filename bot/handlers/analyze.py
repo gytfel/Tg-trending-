@@ -22,12 +22,12 @@ from bot.formatting import esc, split_message
 from bot.handlers import streaming
 from bot.handlers.common import now_in, safe_edit, show
 from bot.handlers.draft import Draft, DraftUnavailable, drafts_available
-from bot.handlers.live import LiveAnswer, send_card
+from bot.handlers.live import BELOW, LiveAnswer, send_card
 from bot.handlers.screener import send_screen
 from bot.handlers.thinking import ThinkingMessage
 from bot.query_parser import parse_query
 from bot.render import Brand, render
-from bot.services import Services, dexscan, glossary, report, screener, skills_builtin
+from bot.services import Services, dexscan, glossary, report, screener, skills_builtin, stocks
 from bot.services.prose import CAPTION_LIMIT, visible_len
 
 log = logging.getLogger(__name__)
@@ -211,7 +211,13 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
     if terms and glossary.bare(text, terms):  # «сквиз лонгов?» — тоже вопрос о термине
         await send_glossary(chat_msg, terms, svc, reply=reply)
         return
-    if parsed.is_empty and not parsed.market and glossary.is_explain(text) and not _ai_on(svc):
+    if (
+        parsed.is_empty
+        and not parsed.market
+        and glossary.is_explain(text)
+        and stocks.detect(text) is None  # «объясни, почему упал Nasdaq» — это про фондовый рынок
+        and not _ai_on(svc)
+    ):
         # вопрос о понятии, которого нет в словаре, а своими словами без ИИ бот не понимает
         respond_kb = keyboards.back()
         await respond(texts.explain_unknown(glossary.popular()), reply_markup=respond_kb)
@@ -418,17 +424,17 @@ async def _send_card(
         send_photo = chat_msg.reply_photo if reply else chat_msg.answer_photo
         if fits:
             sent = await send_photo(photo, caption=fr[0] if fr else caption, reply_markup=None if fr else kb)
-        else:
-            sent = await send_photo(photo)
+        else:  # ответ длиннее подписи — картинка сверху, весь текст сообщениями под ней
+            sent = await send_photo(photo, caption=BELOW if caption else None)
     except Exception:  # noqa: BLE001 — картинка не должна ломать ответ
         log.exception("card report failed, falling back to text")
         return None
     if progress is not None:
         with contextlib.suppress(TelegramBadRequest):
             await progress.delete()  # «Думаю…» больше не нужно — ответ пришёл картинкой
-    if not fits:  # длинный текст — отдельным сообщением под картинкой
+    if not fits:  # длинный текст — отдельными сообщениями под картинкой, сколько бы их ни понадобилось
         first = await chat_msg.answer("✍️")
-        return await _stream_edit(first, caption or result.text, kb, pace)
+        return await _send_text(chat_msg, first, caption or result.text, kb, pace)
     if fr:
 
         async def edit(t: str, k: InlineKeyboardMarkup | None) -> None:
