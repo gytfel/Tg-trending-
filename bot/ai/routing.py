@@ -129,9 +129,7 @@ class ModelRouter:
         providers = [name for name in self._providers(task) if name not in self._paused]
         catalogs = await asyncio.gather(*(self._catalog(name, vision=task == "vision") for name in providers))
         candidates = {
-            ModelRef(provider, name)
-            for provider, names in zip(providers, catalogs, strict=True)
-            for name in names
+            ModelRef(provider, name) for provider, names in zip(providers, catalogs, strict=True) for name in names
         }
         ranked = sorted(
             (

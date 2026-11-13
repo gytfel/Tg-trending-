@@ -73,7 +73,14 @@ def _json(data: Any) -> str:
 
 class LLM:
     def __init__(
-        self, hub: AIHub, model: str, effort: str | None, bot_name: str, vision_model: str = "", *, http: Http | None = None
+        self,
+        hub: AIHub,
+        model: str,
+        effort: str | None,
+        bot_name: str,
+        vision_model: str = "",
+        *,
+        http: Http | None = None,
     ) -> None:
         self.hub = hub
         self.router = ModelRouter(hub, http) if http is not None else None
@@ -134,9 +141,7 @@ class LLM:
             text = ""
             try:
                 if on_text is None and image is None:
-                    text = await self.hub.complete(
-                        candidate, system, prompt, max_tokens=max_tokens, effort=self.effort
-                    )
+                    text = await self.hub.complete(candidate, system, prompt, max_tokens=max_tokens, effort=self.effort)
                 else:
                     async for piece in self.hub.stream(
                         candidate, system, prompt, max_tokens=max_tokens, effort=self.effort, **options

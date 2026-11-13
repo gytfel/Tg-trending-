@@ -284,6 +284,8 @@ class OpenAICompatProvider(Provider):
         except (aiohttp.ClientError, TimeoutError) as e:
             log.warning("%s %s: нет соединения: %r", self.name, model, e)
             raise AIError("нет соединения") from e
+        except ValueError as e:
+            raise AIError("неожиданный формат ответа") from e
         try:
             choice = data["choices"][0]
             message = choice["message"]
@@ -341,6 +343,8 @@ class _SSE:
             return None
         try:
             obj = json.loads(data)
+            if isinstance(obj, dict) and obj.get("error"):
+                raise AIError("ошибка в потоке ответа")
             choice = obj["choices"][0]
             delta = choice.get("delta") or {}
             if choice.get("finish_reason") == "content_filter" or delta.get("refusal"):

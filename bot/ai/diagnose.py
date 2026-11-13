@@ -1,8 +1,8 @@
 """Почему ИИ выключен — по-человечески, для /stats и лога при запуске.
 
 Частые причины:
-- ключ одного провайдера, а модель другого: по умолчанию LLM_MODEL=claude-opus-5-5 (нужен
-  ANTHROPIC_API_KEY), а вписан только OPENROUTER_API_KEY;
+- ключ одного провайдера, а закреплена модель другого: для LLM_MODEL=claude-opus-5-5 нужен
+  ANTHROPIC_API_KEY, а вписан только OPENROUTER_API_KEY;
 - модель без провайдера: «deepseek/deepseek-chat:free» вместо «openrouter:deepseek/deepseek-chat:free»;
 - строка в .env записана дважды: в шаблоне уже есть пустая «OPENROUTER_API_KEY=», и если
   ключ вписан выше неё, работает последняя — пустая.
@@ -50,7 +50,11 @@ def why_off(hub: AIHub, spec: str) -> str | None:
     """Почему модель из настройки недоступна; None — доступна."""
     ref = ModelRef.parse(spec)
     if ref.provider == "auto":
-        return None if with_keys(hub) else "для автовыбора нужен ключ хотя бы одного ИИ-провайдера"
+        if hub._get("OLLAMA_BASE_URL") or any(hub.available(ModelRef(p, "catalog")) for p in with_keys(hub)):
+            return None
+        if "custom" in with_keys(hub):
+            return "для своего сервера нужен адрес CUSTOM_AI_BASE_URL"
+        return "для автовыбора нужен ключ хотя бы одного ИИ-провайдера"
     if hub.available(ref):
         return None
     if not spec.strip():
