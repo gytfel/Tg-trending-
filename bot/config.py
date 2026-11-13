@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     # ИИ. Модель: «claude-opus-5-5» или «провайдер:модель» (openai:…, deepseek:…, openrouter:…, ollama:…).
     # Ключи других провайдеров (OPENAI_API_KEY, DEEPSEEK_API_KEY…) читаются из окружения.
     anthropic_api_key: str | None = None
-    llm_model: str = "claude-opus-5-5"  # главный аналитик (итог)
+    llm_model: str = "auto"  # автовыбор или закреплённая модель главного аналитика
     vision_model: str = ""  # кто читает скриншоты графиков; пусто — главный аналитик (LLM_MODEL)
     llm_effort: str = "medium"  # low | medium | high | xhigh | max; пусто — не передавать
     llm_timeout: float = 90.0

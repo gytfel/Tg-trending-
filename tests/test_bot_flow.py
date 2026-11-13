@@ -232,6 +232,7 @@ def dispatcher():
 async def make_env(registry, dispatcher, hub=None, **overrides):
     overrides.setdefault("stream_answers", False)  # печать проверяем отдельными тестами
     overrides.setdefault("stream_drafts", False)  # правками — как в группах; черновики — своими тестами
+    overrides.setdefault("llm_model", "claude-opus-5-5")  # закреплённая модель для тестов ручного выбора
     tg_draft.reset_support()
     from bot.handlers import menu as menu_handlers
 
@@ -243,7 +244,7 @@ async def make_env(registry, dispatcher, hub=None, **overrides):
     for sid in ("binance", "coingecko", "fear_greed", "coingecko_markets", "binance_klines"):
         reg.add(registry.get(sid))
     http = api()
-    llm = LLM(hub or AIHub({}), "claude-opus-5-5", "medium", "Trending")
+    llm = LLM(hub or AIHub({}), settings.llm_model, "medium", "Trending", http=http)
     svc = Services(
         settings=settings,
         db=db,
@@ -456,6 +457,10 @@ async def test_models_pick_and_persist(registry, dispatcher):
         assert svc.llm.enabled and svc.llm.ref.spec == "gemini:gemini-9.0-flash"
         assert await svc.db.get_kv("llm_model") == "gemini:gemini-9.0-flash"  # переживёт перезапуск
         assert "✅ Gemini · gemini-9.0-flash" in session.buttons() and "↩️ Как в .env" in session.buttons()
+
+        await feed(cb(session.button_data("Автовыбор по задаче")))
+        assert svc.llm.enabled and svc.llm.automatic and await svc.db.get_kv("llm_model") == "auto"
+        assert "✅ Автовыбор по задаче" in session.buttons()
 
         await feed(cb(session.button_data("↩️ Как в .env")))
         assert svc.llm.ref.spec == "claude-opus-5-5" and await svc.db.get_kv("llm_model") is None
