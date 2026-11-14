@@ -116,22 +116,22 @@ def make_live(card_style=True):
     return live, log, bot, clock
 
 
-async def test_live_card_with_draft_sends_photo_before_caption_stream():
+async def test_live_card_replaces_draft_only_after_stream_finishes():
     live, log, bot, clock = make_live()
     await live.begin(CARD, "🐝 Рой: 🟢 2\n\n", "")
-    assert live.mode == "caption"
-    assert len(log) == 1 and log[0][0] == "photo" and log[0][1].endswith("▍")
+    assert log == []
     clock.t += 1
     await live.update("BTC <b>держится</b>")
     clock.t += 0.1
     await live.update("BTC <b>держится</b> у")  # чаще interval — ждём
     clock.t += 1
     await live.update("BTC <b>держится</b> у $100K")
-    captions = [entry[1] for entry in log if entry[0] == "caption"]
-    assert captions == ["🐝 Рой: 🟢 2\n\nBTC <b>держится</b> ▍", "🐝 Рой: 🟢 2\n\nBTC <b>держится</b> у $100K ▍"]
-    assert bot.calls == []
+    texts = [call["text"] for call in bot.calls]
+    assert texts == ["🐝 Рой: 🟢 2\n\nBTC <b>держится</b>", "🐝 Рой: 🟢 2\n\nBTC <b>держится</b> у $100K"]
+    assert log == []
     sent = await live.finish("🐝 Рой: 🟢 2\n\nBTC <b>держится</b> у $100K.", "весь отчёт", "KB")
-    assert log[-1] == ("caption", "🐝 Рой: 🟢 2\n\nBTC <b>держится</b> у $100K.", "KB") and sent.name == "photo"
+    assert log == [("new", "✍️", None), ("media", "🐝 Рой: 🟢 2\n\nBTC <b>держится</b> у $100K.", "KB")]
+    assert sent.name == "new"
 
 
 async def test_live_long_text_goes_under_the_card():
@@ -140,10 +140,10 @@ async def test_live_long_text_goes_under_the_card():
     clock.t += 1
     body = "слово " * 400
     await live.update(body)
+    assert bot.calls[-1]["text"] == body and log == []
     sent = await live.finish(body, "отчёт", "KB")
-    assert log[0][0] == "photo" and ("caption", "👇 Ответ — ниже", None) in log[1:]
-    assert bot.calls == []
-    assert sent.name == "new" and log[-1] == ("text", body, "KB")
+    assert log == [("new", "✍️", None), ("media", "👇 Ответ — ниже", None), ("new", body, "KB")]
+    assert sent.name == "new"
 
 
 async def test_live_broken_card_sends_text(monkeypatch):
