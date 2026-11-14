@@ -239,7 +239,8 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
         draft = None
         if not in_group and svc.settings.stream_answers and svc.settings.stream_drafts and drafts_available():
             # в личке — черновик Telegram: клиент плавно анимирует каждое обновление, как в ИИ-чатах
-            draft = Draft(chat_msg.bot, chat_msg.chat.id)
+            thread_id = chat_msg.message_thread_id if chat_msg.is_topic_message else None
+            draft = Draft(chat_msg.bot, chat_msg.chat.id, thread_id)
         # в группах у Telegram лимит ~20 сообщений в минуту — обновляем «Думаю…» реже
         interval = 1.0 if draft else (3.0 if in_group else 1.5)
         thinking = await ThinkingMessage.start(chat_msg, reply=reply, interval=interval, draft=draft)

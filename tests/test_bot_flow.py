@@ -175,6 +175,7 @@ def msg(
     caption: str | None = None,
     reply_to: Message | None = None,
     user: User = USER,
+    thread_id: int | None = None,
 ) -> Update:
     entities = None
     if text and text.startswith("/"):
@@ -190,6 +191,8 @@ def msg(
             caption=caption,
             entities=entities,
             reply_to_message=reply_to,
+            message_thread_id=thread_id,
+            is_topic_message=True if thread_id is not None else None,
         ),
     )
 
@@ -890,11 +893,12 @@ async def test_draft_text_report(registry, dispatcher):
         await svc.db.close()
 
 
-async def test_ai_answer_streams_in_draft_then_card(registry, dispatcher):
+@pytest.mark.parametrize("thread_id", [None, 42])
+async def test_ai_answer_streams_in_draft_then_card(registry, dispatcher, thread_id):
     hub = StreamingHub()
     session, feed, svc = await draft_env(registry, dispatcher, hub=hub)
     try:
-        await feed(msg("разбери BTC"))
+        await feed(msg("разбери BTC", thread_id=thread_id))
         assert hub.streamed > 10
         drafts = session.drafts()
         typed = [d.text for d in drafts if not d.text.startswith("✱ <b>Думаю")]
@@ -902,6 +906,8 @@ async def test_ai_answer_streams_in_draft_then_card(registry, dispatcher):
         assert_growing(typed)
         anchor, answer = [r for r in session.requests if isinstance(r, SendMessage)]
         photo, (final,) = assert_separate_card(session)
+        assert all(d.message_thread_id == thread_id for d in drafts)
+        assert anchor.message_thread_id == photo.message_thread_id == final.message_thread_id == thread_id
         assert final is answer
         assert session.requests.index(drafts[-1]) < session.requests.index(anchor) < session.requests.index(photo)
         assert anchor.text == "✍️" and any(
