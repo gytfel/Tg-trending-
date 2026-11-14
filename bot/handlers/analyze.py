@@ -13,7 +13,7 @@ from aiogram.enums import ChatType
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.filters import Command, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from aiogram.utils.chat_action import ChatActionSender
 
 from bot import keyboards, texts
@@ -22,13 +22,12 @@ from bot.formatting import esc, split_message
 from bot.handlers import streaming
 from bot.handlers.common import now_in, safe_edit, show
 from bot.handlers.draft import Draft, DraftUnavailable, drafts_available
-from bot.handlers.live import BELOW, LiveAnswer, put_card
+from bot.handlers.live import LiveAnswer, discard_preview, send_report_photo
 from bot.handlers.screener import send_screen
 from bot.handlers.thinking import ThinkingMessage
 from bot.query_parser import parse_query
 from bot.render import Brand, render
 from bot.services import Services, dexscan, glossary, report, screener, skills_builtin, stocks
-from bot.services.prose import CAPTION_LIMIT, visible_len
 
 log = logging.getLogger(__name__)
 router = Router(name="analyze")
@@ -407,57 +406,23 @@ async def _send_card(
     reply: bool,
     pace: Pace = NO_STREAM,
 ) -> Message | None:
-    """Картинка с цифрами + живой текст подписью, который «печатается». None — картинка не получилась."""
-    caption = result.caption
-    if pace.stream and pace.draft is not None:
-        return await _send_card_draft(chat_msg, result, kb, svc, pace)
-    fits = bool(caption) and visible_len(caption) <= CAPTION_LIMIT
-    fr = streaming.frames(caption, pace.group) if pace.stream and fits else []
+    """После предпросмотра отправляет отдельное фото, затем готовый текст с кнопками."""
+    text = result.caption or result.text
+    parts = split_message(text)
+    if pace.stream and parts:
+        if pace.draft is not None:
+            await _type_draft(pace.draft, parts[0], pace.draft_interval)
+        elif progress is not None:
+            progress = await _stream_edit(progress, parts[0], None, pace)
     try:
         png = await asyncio.to_thread(render, result.card, await _brand(chat_msg, svc))
-        photo = BufferedInputFile(png, filename="trending.png")
-        send_photo = chat_msg.reply_photo if reply else chat_msg.answer_photo
-        if fits:
-            sent = await send_photo(photo, caption=fr[0] if fr else caption, reply_markup=None if fr else kb)
-        else:  # ответ длиннее подписи — картинка сверху, весь текст сообщениями под ней
-            sent = await send_photo(photo, caption=BELOW if caption else None)
+        await send_report_photo(chat_msg, png, reply=reply, had_draft=pace.draft is not None)
     except Exception:  # noqa: BLE001 — картинка не должна ломать ответ
         log.exception("card report failed, falling back to text")
         return None
     if progress is not None:
-        with contextlib.suppress(TelegramBadRequest):
-            await progress.delete()  # «Думаю…» больше не нужно — ответ пришёл картинкой
-    if not fits:  # длинный текст — отдельными сообщениями под картинкой, сколько бы их ни понадобилось
-        first = await chat_msg.answer("✍️")
-        return await _send_text(chat_msg, first, caption or result.text, kb, pace)
-    if fr:
-
-        async def edit(t: str, k: InlineKeyboardMarkup | None) -> None:
-            await sent.edit_caption(caption=t, reply_markup=k)
-
-        try:
-            await streaming.play(edit, fr[1:], caption, kb, interval=pace.interval)
-        except TelegramBadRequest as e:
-            log.debug("печать подписи не удалась (%s) — показываю целиком", e)
-            with contextlib.suppress(TelegramBadRequest):
-                await sent.edit_caption(caption=caption, reply_markup=kb)
-    return sent
-
-
-async def _send_card_draft(chat_msg: Message, result, kb: InlineKeyboardMarkup, svc: Services, pace: Pace) -> Message:
-    text = result.caption or result.text
-    parts = split_message(text)
-    if parts:
-        await _type_draft(pace.draft, parts[0], pace.draft_interval)
-    anchor = None
-    try:
-        png = await asyncio.to_thread(render, result.card, await _brand(chat_msg, svc))
-        anchor = await chat_msg.answer("✍️")
-        fits = await put_card(anchor, png, result.caption, kb)
-    except Exception:  # noqa: BLE001 — картинка не должна ломать ответ
-        log.exception("card report failed, sending text only")
-        return await _send_text(chat_msg, anchor, result.text, kb)
-    return anchor if fits else await _send_parts(chat_msg, text, kb)
+        await discard_preview(progress)
+    return await _send_parts(chat_msg, text, kb)
 
 
 async def _brand(chat_msg: Message, svc: Services) -> Brand:
