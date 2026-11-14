@@ -16,6 +16,7 @@ from aiogram.methods import (
     AnswerCallbackQuery,
     DeleteMessage,
     EditMessageCaption,
+    EditMessageMedia,
     EditMessageText,
     GetFile,
     GetMe,
@@ -63,6 +64,7 @@ class FakeSession(BaseSession):
     def __init__(self) -> None:
         super().__init__()
         self.requests: list = []
+        self.sent_text_ids: list[int] = []
         self.drafts_supported = True  # False — как сервер Telegram без sendMessageDraft
         self.custom_emoji_allowed = True  # False — бот без имени на Fragment: свои эмодзи нельзя
         self.sticker_sets: dict[str, StickerSet] = {}
@@ -80,14 +82,28 @@ class FakeSession(BaseSession):
             return self.sticker_sets[method.name]
         if isinstance(method, (SendMessage, EditMessageText)):
             chat_id = method.chat_id or UID
+            if isinstance(method, SendMessage):
+                message_id = next(_ids)
+                self.sent_text_ids.append(message_id)
+            else:
+                message_id = method.message_id
             return Message(
                 # правка возвращает то же сообщение, отправка — новое
-                message_id=method.message_id if isinstance(method, EditMessageText) else next(_ids),
+                message_id=message_id,
                 date=datetime.now(),
                 chat=Chat(id=chat_id, type="private" if chat_id > 0 else "supergroup"),
                 text=method.text,
                 reply_markup=method.reply_markup,
             ).as_(bot)  # как настоящая сессия: ответ привязан к боту
+        if isinstance(method, EditMessageMedia):
+            assert method.message_id in self.sent_text_ids
+            return Message(
+                message_id=method.message_id,
+                date=datetime.now(),
+                chat=Chat(id=method.chat_id or UID, type="private"),
+                caption=method.media.caption,
+                reply_markup=method.reply_markup,
+            ).as_(bot)
         if isinstance(method, EditMessageCaption):
             return Message(
                 message_id=method.message_id,
@@ -769,7 +785,7 @@ class StreamingHub(AIHub):
             yield word + " "
 
 
-async def test_ai_answer_streams_into_card_caption(registry, dispatcher):
+async def test_ai_answer_streams_in_text_then_becomes_card(registry, dispatcher):
     hub = StreamingHub()
     session, feed, svc = await make_env(
         registry, dispatcher, hub=hub, report_style="card", stream_answers=True, stream_interval=0.01
@@ -777,16 +793,17 @@ async def test_ai_answer_streams_into_card_caption(registry, dispatcher):
     try:
         await feed(msg("разбери BTC"))
         assert hub.streamed > 10
-        photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
-        edits = [r for r in session.requests if isinstance(r, EditMessageCaption)]
-        assert photo.reply_markup is None and len(edits) >= 3  # подпись дописывалась по ходу генерации
-        partial = [e.caption for e in edits[:-1]]
+        assert not any(isinstance(r, SendPhoto) for r in session.requests)
+        (photo,) = [r for r in session.requests if isinstance(r, EditMessageMedia)]
+        edits = [r for r in session.requests if isinstance(r, EditMessageText) and r.text.endswith("▍")]
+        assert len(edits) >= 3 and session.requests.index(edits[-1]) < session.requests.index(photo)
+        partial = [e.text for e in edits]
         assert all(c.endswith("▍") for c in partial)
         assert [len(c) for c in partial] == sorted(len(c) for c in partial)
-        final = edits[-1]
-        assert final.caption.startswith("BTC держится у <b>$100K</b>") and not final.caption.endswith("▍")
-        assert "📋 Подробно" in [b.text for row in final.reply_markup.inline_keyboard for b in row]
-        assert any(isinstance(r, DeleteMessage) for r in session.requests)  # «Думаю…» убрали
+        assert photo.media.caption.startswith("BTC держится у <b>$100K</b>") and not photo.media.caption.endswith("▍")
+        assert "📋 Подробно" in session.buttons(photo)
+        assert photo.message_id == session.sent_text_ids[0]
+        assert any(isinstance(r, DeleteMessage) and r.message_id == edits[-1].message_id for r in session.requests)
     finally:
         await svc.db.close()
 
@@ -826,23 +843,23 @@ def assert_growing(texts: list[str]) -> None:
     assert lengths == sorted(lengths) and len(set(lengths)) == len(lengths)  # текст только прибавляется
 
 
-async def test_draft_thinking_then_card_with_caption_edits(registry, dispatcher):
+async def test_draft_thinking_then_draft_text_then_card(registry, dispatcher):
     session, feed, svc = await draft_env(registry, dispatcher)
     try:
         await feed(msg("разбери BTC"))
         drafts = session.drafts()
         assert drafts[0].text.startswith("✱ <b>Думаю") and drafts[0].chat_id == UID
         assert len({d.draft_id for d in drafts}) == 1  # один id — Telegram анимирует переходы
-        assert all(d.text.startswith("✱ <b>Думаю") for d in drafts)
-        (photo,) = [r for r in session.requests if isinstance(r, SendPhoto)]
-        edits = [r for r in session.requests if isinstance(r, EditMessageCaption)]
-        assert len(edits) >= 2
-        assert max(session.requests.index(d) for d in drafts) < session.requests.index(photo)
-        assert session.requests.index(photo) < session.requests.index(edits[0])
-        final = edits[-1]
-        assert "<b>Bitcoin $100" in final.caption and not final.caption.endswith("▍")
-        assert "📋 Подробно" in session.buttons(final) and "🔔 Следить за BTC" in session.buttons(final)
-        assert not any(isinstance(r, SendMessage) for r in session.requests)
+        typed = [d.text for d in drafts if not d.text.startswith("✱ <b>Думаю")]
+        assert len(typed) >= 5 and all(t.startswith("<b>Bitcoin") for t in typed)
+        assert_growing(typed)
+        (anchor,) = [r for r in session.requests if isinstance(r, SendMessage)]
+        (photo,) = [r for r in session.requests if isinstance(r, EditMessageMedia)]
+        assert session.requests.index(drafts[-1]) < session.requests.index(anchor) < session.requests.index(photo)
+        assert photo.message_id == session.sent_text_ids[0] == max(svc.reports)[1]
+        assert "<b>Bitcoin $100" in photo.media.caption and not photo.media.caption.endswith("▍")
+        assert "📋 Подробно" in session.buttons(photo) and "🔔 Следить за BTC" in session.buttons(photo)
+        assert not any(isinstance(r, (SendPhoto, EditMessageCaption)) for r in session.requests)
         await feed(cb("rp:details", message_id=max(svc.reports)[1]))  # кнопки под картинкой работают
         assert "✱ <b>Bitcoin</b> · BTC · #1" in session.last().text
     finally:
@@ -864,22 +881,22 @@ async def test_draft_text_report(registry, dispatcher):
         await svc.db.close()
 
 
-async def test_ai_answer_streams_on_card_after_thinking_draft(registry, dispatcher):
+async def test_ai_answer_streams_in_draft_then_card(registry, dispatcher):
     hub = StreamingHub()
     session, feed, svc = await draft_env(registry, dispatcher, hub=hub)
     try:
         await feed(msg("разбери BTC"))
         assert hub.streamed > 10
-        assert all(d.text.startswith("✱ <b>Думаю") for d in session.drafts())
-        (photo,) = [r for r in session.requests if isinstance(r, SendPhoto)]
-        edits = [r for r in session.requests if isinstance(r, EditMessageCaption)]
-        assert len(edits) >= 3 and session.requests.index(photo) < session.requests.index(edits[0])
-        typed = [e.caption for e in edits[:-1]]
-        assert typed[0].startswith("BTC") and all(t.endswith("▍") for t in typed)
+        drafts = session.drafts()
+        typed = [d.text for d in drafts if not d.text.startswith("✱ <b>Думаю")]
+        assert len(typed) >= 3 and all(t.startswith("BTC") and not t.endswith("▍") for t in typed)
         assert_growing(typed)
-        final = edits[-1]
-        assert final.caption.startswith("BTC держится у <b>$100K</b>") and "📋 Подробно" in session.buttons(final)
-        assert not any(isinstance(r, (SendMessage, EditMessageText)) for r in session.requests)
+        (anchor,) = [r for r in session.requests if isinstance(r, SendMessage)]
+        (photo,) = [r for r in session.requests if isinstance(r, EditMessageMedia)]
+        assert session.requests.index(drafts[-1]) < session.requests.index(anchor) < session.requests.index(photo)
+        assert photo.message_id == session.sent_text_ids[0] == max(svc.reports)[1]
+        assert photo.media.caption.startswith("BTC держится у <b>$100K</b>") and "📋 Подробно" in session.buttons(photo)
+        assert not any(isinstance(r, (SendPhoto, EditMessageCaption, EditMessageText)) for r in session.requests)
     finally:
         await svc.db.close()
 
@@ -1083,13 +1100,15 @@ async def test_long_ai_answer_stays_below_photo_with_drafts_enabled(registry, di
     session, feed, svc = await draft_env(registry, dispatcher, hub=LongHub())
     try:
         await feed(msg("разбери BTC максимально подробно"))
-        (photo,) = [r for r in session.requests if isinstance(r, SendPhoto)]
-        assert session.drafts() and all(d.text.startswith("✱ <b>Думаю") for d in session.drafts())
-        assert not any(
-            isinstance(r, (SendMessage, EditMessageText, EditMessageCaption))
-            for r in session.requests[: session.requests.index(photo)]
-        )
-        assert any(isinstance(r, EditMessageCaption) and r.caption == "👇 Ответ — ниже" for r in session.requests)
+        drafts = session.drafts()
+        assert len(drafts) >= 3 and any("Пункт 0:" in d.text for d in drafts)
+        assert not any(isinstance(r, SendPhoto) for r in session.requests)
+        (photo,) = [r for r in session.requests if isinstance(r, EditMessageMedia)]
+        anchor, *parts = [r for r in session.requests if isinstance(r, SendMessage)]
+        assert session.requests.index(drafts[-1]) < session.requests.index(anchor) < session.requests.index(photo)
+        assert parts and all(session.requests.index(photo) < session.requests.index(part) for part in parts)
+        assert photo.message_id == session.sent_text_ids[0] < max(svc.reports)[1] == session.sent_text_ids[-1]
+        assert photo.media.caption == "👇 Ответ — ниже"
         assert "Пункт 0:" in "\n".join(session.texts()) and "Пункт 29:" in session.last().text
         assert "📋 Подробно" in session.buttons()
         await feed(cb("rp:details", message_id=max(svc.reports)[1]))
@@ -1448,8 +1467,10 @@ async def test_cached_ai_answer_is_still_typed(registry, dispatcher):
         before = len(session.requests)
         await feed(msg("разбери BTC"))
         assert hub.streamed == streamed  # второй раз модель не вызывалась
-        edits = [r for r in session.requests[before:] if isinstance(r, EditMessageCaption)]
-        assert len(edits) >= 2 and edits[-1].caption.startswith("BTC держится у <b>$100K</b>")  # но текст «печатается»
+        replay = session.requests[before:]
+        typed = [r for r in replay if isinstance(r, EditMessageText) and r.text.endswith("▍")]
+        (photo,) = [r for r in replay if isinstance(r, EditMessageMedia)]
+        assert len(typed) >= 2 and photo.media.caption.startswith("BTC держится у <b>$100K</b>")
     finally:
         await svc.db.close()
 

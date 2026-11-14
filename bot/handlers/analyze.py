@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import logging
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
@@ -22,7 +22,7 @@ from bot.formatting import esc, split_message
 from bot.handlers import streaming
 from bot.handlers.common import now_in, safe_edit, show
 from bot.handlers.draft import Draft, DraftUnavailable, drafts_available
-from bot.handlers.live import BELOW, LiveAnswer
+from bot.handlers.live import BELOW, LiveAnswer, put_card
 from bot.handlers.screener import send_screen
 from bot.handlers.thinking import ThinkingMessage
 from bot.query_parser import parse_query
@@ -300,7 +300,7 @@ async def run_analysis(chat_msg: Message, user_id: int, text: str, svc: Services
         sent = None
         if live is not None and live.started:
             # ответ ИИ уже идёт в чат — дописываем целиком и вешаем кнопки
-            details = live.mode in ("caption", "card_text")
+            details = live.card is not None
             sent = await live.finish(
                 result.caption, result.text, keyboards.report(watch_symbol, details=details, sources=admin)
             )
@@ -409,6 +409,8 @@ async def _send_card(
 ) -> Message | None:
     """Картинка с цифрами + живой текст подписью, который «печатается». None — картинка не получилась."""
     caption = result.caption
+    if pace.stream and pace.draft is not None:
+        return await _send_card_draft(chat_msg, result, kb, svc, pace)
     fits = bool(caption) and visible_len(caption) <= CAPTION_LIMIT
     fr = streaming.frames(caption, pace.group) if pace.stream and fits else []
     try:
@@ -427,7 +429,7 @@ async def _send_card(
             await progress.delete()  # «Думаю…» больше не нужно — ответ пришёл картинкой
     if not fits:  # длинный текст — отдельными сообщениями под картинкой, сколько бы их ни понадобилось
         first = await chat_msg.answer("✍️")
-        return await _send_text(chat_msg, first, caption or result.text, kb, replace(pace, draft=None))
+        return await _send_text(chat_msg, first, caption or result.text, kb, pace)
     if fr:
 
         async def edit(t: str, k: InlineKeyboardMarkup | None) -> None:
@@ -440,6 +442,24 @@ async def _send_card(
             with contextlib.suppress(TelegramBadRequest):
                 await sent.edit_caption(caption=caption, reply_markup=kb)
     return sent
+
+
+async def _send_card_draft(
+    chat_msg: Message, result, kb: InlineKeyboardMarkup, svc: Services, pace: Pace
+) -> Message:
+    text = result.caption or result.text
+    parts = split_message(text)
+    if parts:
+        await _type_draft(pace.draft, parts[0], pace.draft_interval)
+    anchor = None
+    try:
+        png = await asyncio.to_thread(render, result.card, await _brand(chat_msg, svc))
+        anchor = await chat_msg.answer("✍️")
+        fits = await put_card(anchor, png, result.caption, kb)
+    except Exception:  # noqa: BLE001 — картинка не должна ломать ответ
+        log.exception("card report failed, sending text only")
+        return await _send_text(chat_msg, anchor, result.text, kb)
+    return anchor if fits else await _send_parts(chat_msg, text, kb)
 
 
 async def _brand(chat_msg: Message, svc: Services) -> Brand:
