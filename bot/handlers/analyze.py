@@ -444,9 +444,7 @@ async def _send_card(
     return sent
 
 
-async def _send_card_draft(
-    chat_msg: Message, result, kb: InlineKeyboardMarkup, svc: Services, pace: Pace
-) -> Message:
+async def _send_card_draft(chat_msg: Message, result, kb: InlineKeyboardMarkup, svc: Services, pace: Pace) -> Message:
     text = result.caption or result.text
     parts = split_message(text)
     if parts:
