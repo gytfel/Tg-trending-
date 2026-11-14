@@ -1,7 +1,7 @@
 """«Живой ответ»: текст ИИ в чате по мере генерации — карточка, текст, лимиты, сбои."""
 
 from aiogram.exceptions import TelegramRetryAfter
-from aiogram.methods import EditMessageText
+from aiogram.methods import EditMessageCaption
 
 from bot.handlers.live import LiveAnswer
 from bot.render import AssetCard, Brand
@@ -36,11 +36,6 @@ class Msg:
     async def edit_text(self, text, reply_markup=None):
         await self._maybe_fail()
         self.log.append(("text", text, reply_markup))
-        return self
-
-    async def edit_media(self, media, reply_markup=None):
-        await self._maybe_fail()
-        self.log.append(("media", media.caption, reply_markup))
         return self
 
     async def delete(self):
@@ -81,35 +76,31 @@ def make(card_style=True, interval=0.8):
 CARD = AssetCard("Bitcoin", "BTC", price="$100 000", series=[1.0, 2.0, 3.0])
 
 
-async def test_photo_and_final_text_follow_stream():
+async def test_card_mode_streams_caption_and_finishes_with_buttons():
     live, log, thinking, clock = make()
     await live.begin(CARD, "🐝 Рой из 3 агентов: 🟢 2 · 🔴 1\n\n", "")
-    assert thinking.closed
-    await live.update("BTC <b>держится</b>")
+    assert thinking.closed and live.mode == "caption"
+    assert log[0][0] == "photo" and log[0][1].endswith("▍") and ("delete", "thinking", None) in log
+    await live.update("BTC <b>держится</b>")  # сразу после фото — рано, ждём паузу
+    assert not any(e[0] == "caption" for e in log)
     clock.t += 1
     await live.update("BTC <b>держится</b> у $100K")
-    assert not any(e[0] in {"photo", "media"} for e in log)
-    preview = [e for e in log if e[0] == "text"][-1][1]
-    assert preview.startswith("🐝 Рой") and preview.endswith("▍")
-    assert_tg_html(preview)
+    caption = [e for e in log if e[0] == "caption"][-1][1]
+    assert caption.startswith("🐝 Рой") and caption.endswith("▍")
+    assert_tg_html(caption)
     sent = await live.finish("🐝 Рой…\n\nBTC <b>держится</b> у $100K.", "весь отчёт", "KB")
-    photo = ("photo", None, None)
-    final = ("new", "🐝 Рой…\n\nBTC <b>держится</b> у $100K.", "KB")
-    assert log.index(photo) < log.index(final)
-    assert ("delete", "thinking", None) in log and sent is not thinking.message
-    assert not any(e[0] in {"caption", "media"} for e in log)
+    assert log[-1] == ("caption", "🐝 Рой…\n\nBTC <b>держится</b> у $100K.", "KB") and sent.name == "photo"
 
 
-async def test_long_answer_stays_below_card_when_stream_finishes():
-    live, log, thinking, clock = make()
+async def test_long_answer_moves_below_card():
+    live, log, _, clock = make()
     await live.begin(CARD)
     clock.t += 1
-    await live.update("слово " * 400)
-    assert not any(e[0] in {"photo", "media"} for e in log)
-    assert log[-1][0] == "text" and log[-1][1].endswith("▍")
+    await live.update("слово " * 400)  # длиннее подписи — подпись «ответ ниже», текст сообщением под картинкой
+    assert ("caption", "👇 Ответ — ниже", None) in log and live.mode == "card_text"
+    assert ("new", "✍️", None) in log and log[-1][0] == "text" and log[-1][1].endswith("▍")
     sent = await live.finish("слово " * 400, "отчёт", "KB")
-    assert log.index(("photo", None, None)) < log.index(("new", "слово " * 400, "KB"))
-    assert ("delete", "thinking", None) in log and sent is not thinking.message
+    assert sent.name == "new" and log[-1] == ("text", "слово " * 400, "KB")
 
 
 def paragraphs(n: int) -> str:
@@ -166,22 +157,20 @@ async def test_broken_card_falls_back_to_text(monkeypatch):
         raise OSError("нет шрифта")
 
     monkeypatch.setattr("bot.handlers.live.render", broken)
-    live, log, _, _ = make()
+    live, log, thinking, _ = make()
     await live.begin(CARD)
-    await live.finish("подпись", "полный отчёт", "KB")
-    assert not any(e[0] in {"photo", "media"} for e in log)
-    assert log[-1] == ("text", "полный отчёт", "KB")
+    assert live.mode == "text" and not any(e[0] == "photo" for e in log)
 
 
 async def test_flood_control_pauses_updates():
-    live, log, _, clock = make(card_style=False)
-    await live.begin(None)
+    live, log, _, clock = make()
+    await live.begin(CARD)
     clock.t += 1
-    live.message.fail_next = TelegramRetryAfter(method=EditMessageText(text="x"), message="Flood", retry_after=5)
+    live.message.fail_next = TelegramRetryAfter(method=EditMessageCaption(caption="x"), message="Flood", retry_after=5)
     await live.update("первый кусок")
     clock.t += 1
     await live.update("второй кусок")  # ещё на паузе
-    assert not any(e[0] == "text" for e in log)
+    assert not any(e[0] == "caption" for e in log)
     clock.t += 5
     await live.update("третий кусок")
-    assert [e for e in log if e[0] == "text"][-1][1].startswith("третий кусок")
+    assert [e for e in log if e[0] == "caption"][-1][1].startswith("третий кусок")

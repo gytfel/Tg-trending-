@@ -1,7 +1,9 @@
-"""/models — включить автовыбор или закрепить одну модель.
+"""🤖 /models — выбрать модель ИИ кнопкой, без правки .env.
 
-Для ручного выбора бот проверяет модель пробным запросом. Настройка хранится
-в базе, а «Как в .env» возвращает LLM_MODEL из настроек.
+Бот спрашивает у провайдеров, ключи которых вписаны в .env, какие модели доступны, и
+показывает подходящие для аналитика. По нажатию — пробный запрос: модель включается,
+только если ответила. Выбор хранится в базе и переживает перезапуск; «Как в .env»
+возвращает LLM_MODEL из настроек.
 """
 
 from __future__ import annotations
@@ -38,13 +40,12 @@ def current(svc: Services) -> str:
 async def render(svc: Services, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     choices, errors = await models.choices(svc.http, svc.hub)
     svc.model_choices[user_id] = choices
-    state = "провайдер настроен" if svc.llm.enabled else "⚪ выключен"
+    state = "✅ работает" if svc.llm.enabled else "⚪ выключен"
     saved = await svc.db.get_kv(KV_KEY)
-    label = "Автовыбор по задаче" if svc.llm.automatic else f"<code>{esc(current(svc))}</code>"
     lines = [
         "🤖 <b>Модель ИИ</b>",
-        f"Сейчас: {label} — {state}" + (" · выбрана здесь" if saved else " · из .env (LLM_MODEL)"),
-        "Автовыбор подбирает модель из подключённых провайдеров для каждого запроса.",
+        f"Сейчас: <code>{esc(current(svc))}</code> — {state}"
+        + (" · выбрана здесь" if saved else " · из .env (LLM_MODEL)"),
     ]
     if not svc.llm.enabled and svc.hub is not None:
         reason = diagnose.why_off(svc.hub, current(svc))
@@ -53,20 +54,18 @@ async def render(svc: Services, user_id: int) -> tuple[str, InlineKeyboardMarkup
     if choices:
         lines.append("\nДоступно по твоим ключам — нажми, бот проверит модель пробным запросом и включит её:")
     elif not errors:
-        lines.append("\nСписок подходящих моделей пуст.")
+        lines.append("\nКлючей ИИ в .env нет. Впиши ключ (tg-trending config) и открой /models снова.")
     for provider, err in errors.items():
         lines.append(f"⚠️ {esc(diagnose.TITLES.get(provider, provider))}: список не получен — {esc(err)}")
     b = InlineKeyboardBuilder()
     for i, c in enumerate(choices):
         mark = "✅ " if c.spec == current(svc) else ""
         b.button(text=f"{mark}{c.label}"[:60], callback_data=ModelCb(action="use", i=i))
-    auto_mark = "✅ " if svc.llm.automatic else ""
-    b.button(text=f"{auto_mark}Автовыбор по задаче", callback_data=ModelCb(action="auto"))
     if saved:
         b.button(text="↩️ Как в .env", callback_data=ModelCb(action="env"))
     b.button(text="🔄 Обновить", callback_data=ModelCb(action="list"))
     b.button(text=keyboards.BACK, callback_data=Nav(to="help"))
-    b.adjust(*([1] * (len(choices) + 1)), 3 if saved else 2)
+    b.adjust(*([1] * len(choices)), 2 if not saved else 3)
     return "\n".join(lines), b.as_markup()
 
 
@@ -112,10 +111,6 @@ async def model_button(cb: CallbackQuery, callback_data: ModelCb, svc: Services)
         await svc.db.set_kv(KV_KEY, None)
         svc.llm.set_model(svc.settings.llm_model)
         await cb.answer(f"Вернул модель из .env: {svc.settings.llm_model}", show_alert=True)
-    elif callback_data.action == "auto":
-        await svc.db.set_kv(KV_KEY, "auto")
-        svc.llm.set_model("auto")
-        await cb.answer("Автовыбор по задаче включён" if svc.llm.enabled else "Автовыбор сохранён. Подключи ключ ИИ.")
     elif callback_data.action == "use":
         listed = svc.model_choices.get(user_id) or []
         if not 0 <= callback_data.i < len(listed):
@@ -125,8 +120,8 @@ async def model_button(cb: CallbackQuery, callback_data: ModelCb, svc: Services)
             await cb.answer(f"Проверяю {choice.model}…")
             ok, note = await try_model(svc, choice.spec)
             if ok:
-                await svc.db.set_kv(KV_KEY, choice.spec)
                 svc.llm.set_model(choice.spec)
+                await svc.db.set_kv(KV_KEY, choice.spec)
                 if isinstance(cb.message, Message):
                     await cb.message.answer(
                         f"✅ ИИ включён: <code>{esc(choice.spec)}</code> — ответила за {esc(note)}.\n"

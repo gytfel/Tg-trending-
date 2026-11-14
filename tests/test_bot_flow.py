@@ -16,7 +16,6 @@ from aiogram.methods import (
     AnswerCallbackQuery,
     DeleteMessage,
     EditMessageCaption,
-    EditMessageMedia,
     EditMessageText,
     GetFile,
     GetMe,
@@ -64,8 +63,6 @@ class FakeSession(BaseSession):
     def __init__(self) -> None:
         super().__init__()
         self.requests: list = []
-        self.sent_text_ids: list[int] = []
-        self.sent_photo_ids: list[int] = []
         self.drafts_supported = True  # False — как сервер Telegram без sendMessageDraft
         self.custom_emoji_allowed = True  # False — бот без имени на Fragment: свои эмодзи нельзя
         self.sticker_sets: dict[str, StickerSet] = {}
@@ -83,28 +80,14 @@ class FakeSession(BaseSession):
             return self.sticker_sets[method.name]
         if isinstance(method, (SendMessage, EditMessageText)):
             chat_id = method.chat_id or UID
-            if isinstance(method, SendMessage):
-                message_id = next(_ids)
-                self.sent_text_ids.append(message_id)
-            else:
-                message_id = method.message_id
             return Message(
                 # правка возвращает то же сообщение, отправка — новое
-                message_id=message_id,
+                message_id=method.message_id if isinstance(method, EditMessageText) else next(_ids),
                 date=datetime.now(),
                 chat=Chat(id=chat_id, type="private" if chat_id > 0 else "supergroup"),
                 text=method.text,
                 reply_markup=method.reply_markup,
             ).as_(bot)  # как настоящая сессия: ответ привязан к боту
-        if isinstance(method, EditMessageMedia):
-            assert method.message_id in self.sent_text_ids
-            return Message(
-                message_id=method.message_id,
-                date=datetime.now(),
-                chat=Chat(id=method.chat_id or UID, type="private"),
-                caption=method.media.caption,
-                reply_markup=method.reply_markup,
-            ).as_(bot)
         if isinstance(method, EditMessageCaption):
             return Message(
                 message_id=method.message_id,
@@ -115,10 +98,8 @@ class FakeSession(BaseSession):
             ).as_(bot)
         if isinstance(method, SendPhoto):
             chat_id = method.chat_id or UID
-            message_id = next(_ids)
-            self.sent_photo_ids.append(message_id)
             return Message(
-                message_id=message_id,
+                message_id=next(_ids),
                 date=datetime.now(),
                 chat=Chat(id=chat_id, type="private" if chat_id > 0 else "supergroup"),
                 caption=method.caption,
@@ -175,7 +156,6 @@ def msg(
     caption: str | None = None,
     reply_to: Message | None = None,
     user: User = USER,
-    thread_id: int | None = None,
 ) -> Update:
     entities = None
     if text and text.startswith("/"):
@@ -191,8 +171,6 @@ def msg(
             caption=caption,
             entities=entities,
             reply_to_message=reply_to,
-            message_thread_id=thread_id,
-            is_topic_message=True if thread_id is not None else None,
         ),
     )
 
@@ -254,7 +232,6 @@ def dispatcher():
 async def make_env(registry, dispatcher, hub=None, **overrides):
     overrides.setdefault("stream_answers", False)  # печать проверяем отдельными тестами
     overrides.setdefault("stream_drafts", False)  # правками — как в группах; черновики — своими тестами
-    overrides.setdefault("llm_model", "claude-opus-5-5")  # закреплённая модель для тестов ручного выбора
     tg_draft.reset_support()
     from bot.handlers import menu as menu_handlers
 
@@ -266,7 +243,7 @@ async def make_env(registry, dispatcher, hub=None, **overrides):
     for sid in ("binance", "coingecko", "fear_greed", "coingecko_markets", "binance_klines"):
         reg.add(registry.get(sid))
     http = api()
-    llm = LLM(hub or AIHub({}), settings.llm_model, "medium", "Trending", http=http)
+    llm = LLM(hub or AIHub({}), "claude-opus-5-5", "medium", "Trending")
     svc = Services(
         settings=settings,
         db=db,
@@ -480,10 +457,6 @@ async def test_models_pick_and_persist(registry, dispatcher):
         assert await svc.db.get_kv("llm_model") == "gemini:gemini-9.0-flash"  # переживёт перезапуск
         assert "✅ Gemini · gemini-9.0-flash" in session.buttons() and "↩️ Как в .env" in session.buttons()
 
-        await feed(cb(session.button_data("Автовыбор по задаче")))
-        assert svc.llm.enabled and svc.llm.automatic and await svc.db.get_kv("llm_model") == "auto"
-        assert "✅ Автовыбор по задаче" in session.buttons()
-
         await feed(cb(session.button_data("↩️ Как в .env")))
         assert svc.llm.ref.spec == "claude-opus-5-5" and await svc.db.get_kv("llm_model") is None
     finally:
@@ -684,46 +657,34 @@ async def test_report_buttons_follow_their_report(env):
 # --- ответ картинкой-карточкой ------------------------------------------------------------------
 
 
-def assert_separate_card(session, requests=None):
-    requests = session.requests if requests is None else requests
-    (photo,) = [r for r in requests if isinstance(r, SendPhoto)]
-    assert photo.caption is None and photo.reply_markup is None
-    assert not any(isinstance(r, (EditMessageCaption, EditMessageMedia)) for r in requests)
-    parts = [r for r in requests[requests.index(photo) + 1 :] if isinstance(r, SendMessage)]
-    assert parts and session.sent_photo_ids[-1] < session.sent_text_ids[-len(parts)]
-    assert all(r.reply_markup is None for r in parts[:-1])
-    assert "📋 Подробно" in session.buttons(parts[-1])
-    return photo, parts
-
-
 async def test_card_report_in_private(card_env):
     session, feed, svc = card_env
     await feed(msg("разбери BTC"))
-    _, (answer,) = assert_separate_card(session)
-    assert "<b>Bitcoin $100" in answer.text and "за сутки" in answer.text
-    assert "🔔 Следить за BTC" in session.buttons(answer)
-    thinking = [r for r in session.requests if isinstance(r, SendMessage)][0]
+    photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+    assert "<b>Bitcoin $100" in photo.caption and "за сутки" in photo.caption
+    labels = [b.text for row in photo.reply_markup.inline_keyboard for b in row]
+    assert "📋 Подробно" in labels and "🔔 Следить за BTC" in labels
+    thinking = [r for r in session.requests if isinstance(r, SendMessage)][-1]
     assert thinking.text.startswith("✱ <b>Думаю")
     assert any(isinstance(r, DeleteMessage) for r in session.requests)  # «Думаю…» убрали
     assert (await svc.quota.status(UID)).used == 1
 
-    answer_msg_id = max(svc.reports)[1]
-    assert answer_msg_id == session.sent_text_ids[-1]
-    await feed(cb("rp:details", message_id=answer_msg_id))
+    photo_msg_id = max(svc.reports)[1]
+    await feed(cb("rp:details", message_id=photo_msg_id))
     assert "✱ <b>Bitcoin</b> · BTC · #1" in session.last().text  # построчный отчёт по кнопке
 
 
 async def test_card_market_overview(card_env):
     session, feed, _ = card_env
     await feed(msg("что сейчас на рынке?"))
-    _, (answer,) = assert_separate_card(session)
-    assert answer.text.startswith("По рынку:") and "BTC <b>$100" in answer.text
+    photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+    assert photo.caption.startswith("По рынку:") and "BTC <b>$100" in photo.caption
 
 
 async def test_card_in_group_is_a_reply(card_env):
     session, feed, _ = card_env
     await feed(msg("@trending_test_bot BTC", GROUP))
-    photo, _ = assert_separate_card(session)
+    photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
     assert photo.chat_id == GROUP.id and photo.reply_parameters is not None
 
 
@@ -751,11 +712,18 @@ async def stream_env(registry, dispatcher):
     await svc.db.close()
 
 
-async def test_card_text_is_separate_with_streaming_enabled(stream_env):
+async def test_card_caption_is_typed_gradually(stream_env):
     session, feed, _ = stream_env
     await feed(msg("разбери BTC"))
-    _, (answer,) = assert_separate_card(session)
-    assert "<b>Bitcoin $100" in answer.text and not answer.text.endswith("▍")
+    photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+    edits = [r for r in session.requests if isinstance(r, EditMessageCaption)]
+    assert photo.caption.endswith("▍") and photo.reply_markup is None  # первый кусок, без кнопок
+    assert len(edits) >= 2
+    lengths = [len(photo.caption)] + [len(e.caption) for e in edits]
+    assert lengths == sorted(lengths)  # текст только прибавляется
+    assert all(e.caption.endswith("▍") for e in edits[:-1])
+    final = edits[-1]
+    assert not final.caption.endswith("▍") and final.reply_markup is not None  # целиком и с кнопками
 
 
 async def test_text_answer_is_typed_into_thinking_message(registry, dispatcher):
@@ -796,7 +764,7 @@ class StreamingHub(AIHub):
             yield word + " "
 
 
-async def test_ai_answer_streams_in_text_before_photo_and_final_answer(registry, dispatcher):
+async def test_ai_answer_streams_into_card_caption(registry, dispatcher):
     hub = StreamingHub()
     session, feed, svc = await make_env(
         registry, dispatcher, hub=hub, report_style="card", stream_answers=True, stream_interval=0.01
@@ -804,15 +772,16 @@ async def test_ai_answer_streams_in_text_before_photo_and_final_answer(registry,
     try:
         await feed(msg("разбери BTC"))
         assert hub.streamed > 10
-        photo, (answer,) = assert_separate_card(session)
-        edits = [r for r in session.requests if isinstance(r, EditMessageText) and r.text.endswith("▍")]
-        assert len(edits) >= 3 and session.requests.index(edits[-1]) < session.requests.index(photo)
-        partial = [e.text for e in edits]
+        photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+        edits = [r for r in session.requests if isinstance(r, EditMessageCaption)]
+        assert photo.reply_markup is None and len(edits) >= 3  # подпись дописывалась по ходу генерации
+        partial = [e.caption for e in edits[:-1]]
         assert all(c.endswith("▍") for c in partial)
         assert [len(c) for c in partial] == sorted(len(c) for c in partial)
-        assert answer.text.startswith("BTC держится у <b>$100K</b>") and not answer.text.endswith("▍")
-        assert edits[-1].message_id == session.sent_text_ids[0]
-        assert any(isinstance(r, DeleteMessage) and r.message_id == edits[-1].message_id for r in session.requests)
+        final = edits[-1]
+        assert final.caption.startswith("BTC держится у <b>$100K</b>") and not final.caption.endswith("▍")
+        assert "📋 Подробно" in [b.text for row in final.reply_markup.inline_keyboard for b in row]
+        assert any(isinstance(r, DeleteMessage) for r in session.requests)  # «Думаю…» убрали
     finally:
         await svc.db.close()
 
@@ -852,27 +821,27 @@ def assert_growing(texts: list[str]) -> None:
     assert lengths == sorted(lengths) and len(set(lengths)) == len(lengths)  # текст только прибавляется
 
 
-async def test_draft_thinking_then_draft_text_then_card(registry, dispatcher):
+async def test_draft_thinking_then_card_text_typed_in_draft(registry, dispatcher):
     session, feed, svc = await draft_env(registry, dispatcher)
     try:
         await feed(msg("разбери BTC"))
         drafts = session.drafts()
         assert drafts[0].text.startswith("✱ <b>Думаю") and drafts[0].chat_id == UID
         assert len({d.draft_id for d in drafts}) == 1  # один id — Telegram анимирует переходы
+        # «Думаю…» — в черновике, отдельного сообщения нет
+        assert not any(t.startswith("✱ <b>Думаю") for t in session.texts())
         typed = [d.text for d in drafts if not d.text.startswith("✱ <b>Думаю")]
-        assert len(typed) >= 5 and all(t.startswith("<b>Bitcoin") for t in typed)
+        assert len(typed) >= 5
         assert_growing(typed)
-        anchor, answer = [r for r in session.requests if isinstance(r, SendMessage)]
-        photo, (final,) = assert_separate_card(session)
-        assert final is answer
-        assert session.requests.index(drafts[-1]) < session.requests.index(anchor) < session.requests.index(photo)
-        assert anchor.text == "✍️" and any(
-            isinstance(r, DeleteMessage) and r.message_id == session.sent_text_ids[0] for r in session.requests
-        )
-        assert session.sent_text_ids[0] < session.sent_photo_ids[0] < session.sent_text_ids[1] == max(svc.reports)[1]
-        assert "<b>Bitcoin $100" in answer.text and not answer.text.endswith("▍")
-        assert "🔔 Следить за BTC" in session.buttons(answer)
-        await feed(cb("rp:details", message_id=max(svc.reports)[1]))  # кнопки на итоговом тексте
+        # текст дописан — и только тогда одно сообщение: картинка сверху, этот же текст подписью, кнопки
+        photos = [r for r in session.requests if isinstance(r, SendPhoto)]
+        assert len(photos) == 1 and session.requests[-1] is photos[0]
+        photo = photos[0]
+        assert "<b>Bitcoin $100" in photo.caption and photo.caption.startswith(typed[-1].rstrip()[:50])
+        assert session.requests.index(photo) > max(session.requests.index(d) for d in drafts)
+        assert "📋 Подробно" in session.buttons(photo) and "🔔 Следить за BTC" in session.buttons(photo)
+        assert not any(isinstance(r, SendMessage) for r in session.requests)  # никаких лишних сообщений
+        await feed(cb("rp:details", message_id=max(svc.reports)[1]))  # кнопки под картинкой работают
         assert "✱ <b>Bitcoin</b> · BTC · #1" in session.last().text
     finally:
         await svc.db.close()
@@ -893,29 +862,20 @@ async def test_draft_text_report(registry, dispatcher):
         await svc.db.close()
 
 
-@pytest.mark.parametrize("thread_id", [None, 42])
-async def test_ai_answer_streams_in_draft_then_card(registry, dispatcher, thread_id):
+async def test_ai_answer_streams_via_draft(registry, dispatcher):
     hub = StreamingHub()
     session, feed, svc = await draft_env(registry, dispatcher, hub=hub)
     try:
-        await feed(msg("разбери BTC", thread_id=thread_id))
+        await feed(msg("разбери BTC"))
         assert hub.streamed > 10
-        drafts = session.drafts()
-        typed = [d.text for d in drafts if not d.text.startswith("✱ <b>Думаю")]
-        assert len(typed) >= 3 and all(t.startswith("BTC") and not t.endswith("▍") for t in typed)
+        typed = [d.text for d in session.drafts() if not d.text.startswith("✱ <b>Думаю")]
+        assert len(typed) >= 3 and typed[0].startswith("BTC")  # текст идёт прямо из модели
         assert_growing(typed)
-        anchor, answer = [r for r in session.requests if isinstance(r, SendMessage)]
-        photo, (final,) = assert_separate_card(session)
-        assert all(d.message_thread_id == thread_id for d in drafts)
-        assert anchor.message_thread_id == photo.message_thread_id == final.message_thread_id == thread_id
-        assert final is answer
-        assert session.requests.index(drafts[-1]) < session.requests.index(anchor) < session.requests.index(photo)
-        assert anchor.text == "✍️" and any(
-            isinstance(r, DeleteMessage) and r.message_id == session.sent_text_ids[0] for r in session.requests
-        )
-        assert session.sent_text_ids[0] < session.sent_photo_ids[0] < session.sent_text_ids[1] == max(svc.reports)[1]
-        assert answer.text.startswith("BTC держится у <b>$100K</b>")
-        assert not any(isinstance(r, EditMessageText) for r in session.requests)
+        assert not any(t.endswith("▍") for t in typed)  # черновик анимирует сам — без курсора
+        photo = session.requests[-1]  # картинка — последней, когда ИИ дописал
+        assert isinstance(photo, SendPhoto) and photo.caption.startswith("BTC держится у <b>$100K</b>")
+        assert "📋 Подробно" in session.buttons(photo)
+        assert not any(isinstance(r, (SendMessage, EditMessageCaption, EditMessageText)) for r in session.requests)
     finally:
         await svc.db.close()
 
@@ -929,8 +889,9 @@ async def test_drafts_unsupported_fall_back_to_edits(registry, dispatcher):
         assert not tg_draft.drafts_available()
         thinking = [r for r in session.requests if isinstance(r, SendMessage)][0]
         assert thinking.text.startswith("✱ <b>Думаю")  # «Думаю…» обычным сообщением
-        _, (answer,) = assert_separate_card(session)
-        assert "<b>Bitcoin $100" in answer.text
+        photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+        edits = [r for r in session.requests if isinstance(r, EditMessageCaption)]
+        assert photo.caption.endswith("▍") and edits and edits[-1].reply_markup is not None
         before = len(session.requests)
         await feed(msg("разбери BTC"))
         assert len(session.drafts()) == 1 and len(session.requests) > before  # второй раз даже не пробует
@@ -943,7 +904,7 @@ async def test_no_drafts_in_groups(registry, dispatcher):
     try:
         await feed(msg("@trending_test_bot BTC", GROUP))
         assert session.drafts() == []  # черновики — только в личке
-        photo, _ = assert_separate_card(session)
+        photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
         assert photo.chat_id == GROUP.id and photo.reply_parameters is not None
     finally:
         await svc.db.close()
@@ -955,10 +916,10 @@ async def test_no_drafts_in_groups(registry, dispatcher):
 async def test_builtin_skill_without_ai_in_card(card_env):
     session, feed, svc = card_env
     await feed(msg("разбери BTC навык риск депозит 2000 риск 2% стоп 5%"))
-    _, (answer,) = assert_separate_card(session)
-    text = answer.text.replace(" ", " ")
-    assert text.startswith("<b>Bitcoin $100 000</b>")  # строка с ценой, дальше — навык
-    assert "⚖️ <b>Риск · BTC</b>" in text and "позиция <b>$800</b>" in text
+    photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+    cap = photo.caption.replace(" ", " ")
+    assert cap.startswith("<b>Bitcoin $100 000</b>")  # строка с ценой, дальше — навык
+    assert "⚖️ <b>Риск · BTC</b>" in cap and "позиция <b>$800</b>" in cap
     assert (await svc.quota.status(UID)).used == 1
     await feed(cb("rp:details", message_id=max(svc.reports)[1]))
     assert "⚖️ <b>Риск · BTC</b>" in session.last().text  # и в подробном отчёте
@@ -990,8 +951,8 @@ async def test_skills_screen_is_short(env):
 async def test_builtin_skill_without_coin_is_about_market(card_env):
     session, feed, _ = card_env
     await feed(msg("навык коротко"))
-    _, (answer,) = assert_separate_card(session)
-    assert "⚡ <b>Коротко · рынок</b>" in answer.text
+    photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+    assert "⚡ <b>Коротко · рынок</b>" in photo.caption
 
 
 # --- скринер рынка -----------------------------------------------------------------------------
@@ -1091,10 +1052,7 @@ class LongHub(AIHub):
         return "\n\n".join(f"Пункт {i}: " + "подробный разбор фактора " * 14 for i in range(30))
 
     async def stream(self, ref, system, prompt, **kw):
-        answer = await self.complete(ref, system, prompt, **kw)
-        yield answer[:500]
-        await asyncio.sleep(0.02)
-        yield answer[500:]
+        yield await self.complete(ref, system, prompt, **kw)
 
 
 async def test_long_ai_answer_is_not_cut(registry, dispatcher):
@@ -1103,31 +1061,13 @@ async def test_long_ai_answer_is_not_cut(registry, dispatcher):
     try:
         await feed(msg("разбери BTC максимально подробно"))
         assert "до 850 символов" not in hub.system and "жёсткого лимита длины нет" in hub.system
-        _, parts = assert_separate_card(session)
-        texts_ = [r.text for r in parts]
+        photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+        assert photo.caption == "👇 Ответ — ниже"  # в подпись не влез — картинка сверху, текст под ней
+        texts_ = [r.text for r in session.requests if isinstance(r, (SendMessage, EditMessageText)) and r.text]
         joined = "\n".join(texts_)
         assert "Пункт 0:" in joined and "Пункт 29:" in joined  # ответ целиком, без обрезки
         assert all(len(t) <= 4096 for t in texts_)
         assert session.last().reply_markup is not None  # кнопки — на последнем сообщении
-    finally:
-        await svc.db.close()
-
-
-async def test_long_ai_answer_stays_below_photo_with_drafts_enabled(registry, dispatcher):
-    session, feed, svc = await draft_env(registry, dispatcher, hub=LongHub())
-    try:
-        await feed(msg("разбери BTC максимально подробно"))
-        drafts = session.drafts()
-        assert len(drafts) >= 3 and any("Пункт 0:" in d.text for d in drafts)
-        photo, parts = assert_separate_card(session)
-        anchor = next(r for r in session.requests if isinstance(r, SendMessage))
-        assert anchor.text == "✍️"
-        assert session.requests.index(drafts[-1]) < session.requests.index(anchor) < session.requests.index(photo)
-        assert session.sent_text_ids[0] < session.sent_photo_ids[0] < max(svc.reports)[1] == session.sent_text_ids[-1]
-        assert len(parts) > 1 and "Пункт 0:" in "\n".join(part.text for part in parts)
-        assert "Пункт 29:" in parts[-1].text
-        await feed(cb("rp:details", message_id=max(svc.reports)[1]))
-        assert "✱ <b>Bitcoin</b>" in "\n".join(session.texts())
     finally:
         await svc.db.close()
 
@@ -1314,9 +1254,9 @@ async def test_takes_by_words_in_card(card_env):
     session, feed, svc = card_env
     with_candles(svc)
     await feed(msg("тейки по BTC"))
-    _, (answer,) = assert_separate_card(session)
-    assert "🎯 <b>Сетап · BTC · 4ч</b> — 🟢 лонг" in answer.text
-    assert "Тейк 1:" in answer.text and "R:R" in answer.text and "Стоп:" in answer.text
+    photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+    assert "🎯 <b>Сетап · BTC · 4ч</b> — 🟢 лонг" in photo.caption
+    assert "Тейк 1:" in photo.caption and "R:R" in photo.caption and "Стоп:" in photo.caption
     assert (await svc.quota.status(UID)).used == 1
 
 
@@ -1482,11 +1422,8 @@ async def test_cached_ai_answer_is_still_typed(registry, dispatcher):
         before = len(session.requests)
         await feed(msg("разбери BTC"))
         assert hub.streamed == streamed  # второй раз модель не вызывалась
-        replay = session.requests[before:]
-        typed = [r for r in replay if isinstance(r, EditMessageText) and r.text.endswith("▍")]
-        photo, (answer,) = assert_separate_card(session, replay)
-        assert len(typed) >= 2 and replay.index(typed[-1]) < replay.index(photo)
-        assert answer.text.startswith("BTC держится у <b>$100K</b>")
+        edits = [r for r in session.requests[before:] if isinstance(r, EditMessageCaption)]
+        assert len(edits) >= 2 and edits[-1].caption.startswith("BTC держится у <b>$100K</b>")  # но текст «печатается»
     finally:
         await svc.db.close()
 
@@ -1657,10 +1594,10 @@ async def test_several_skills_get_synthesis_first(card_env):
     session, feed, svc = card_env
     with_candles(svc)
     await feed(msg("тейки и дивергенции по BTC"))  # два навыка с направлением
-    _, (answer,) = assert_separate_card(session)
-    text = answer.text
-    assert "🧠 <b>Свод · BTC</b>" in text and text.index("🧠 <b>Свод") < text.index("🎯 <b>Сетап")
-    assert "🟢 За рост: тренд 4ч/1д вверх" in text and "Итог:" in text
+    photo = [r for r in session.requests if isinstance(r, SendPhoto)][-1]
+    cap = photo.caption
+    assert "🧠 <b>Свод · BTC</b>" in cap and cap.index("🧠 <b>Свод") < cap.index("🎯 <b>Сетап")
+    assert "🟢 За рост: тренд 4ч/1д вверх" in cap and "Итог:" in cap
 
 
 async def test_synth_skill_on_its_own(env):

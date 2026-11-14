@@ -89,8 +89,6 @@ class ModelRef:
     @classmethod
     def parse(cls, spec: str) -> ModelRef:
         spec = spec.strip()
-        if spec.lower() == "auto":
-            return cls("auto", "auto")
         head, sep, tail = spec.partition(":")
         if sep and (head == "anthropic" or head in OPENAI_COMPAT):
             return cls(head, tail.strip())
@@ -101,7 +99,7 @@ class ModelRef:
     @property
     def spec(self) -> str:
         """Как писать в LLM_MODEL: у Claude — просто название, у остальных — «провайдер:модель»."""
-        return self.model if self.provider in {"anthropic", "auto"} else f"{self.provider}:{self.model}"
+        return self.model if self.provider == "anthropic" else f"{self.provider}:{self.model}"
 
     @property
     def short(self) -> str:
@@ -109,7 +107,7 @@ class ModelRef:
         return name.removeprefix("claude-")
 
     def __str__(self) -> str:
-        return "auto" if self.provider == "auto" else f"{self.provider}:{self.model}"
+        return f"{self.provider}:{self.model}"
 
 
 class Provider(ABC):
@@ -182,16 +180,16 @@ class AnthropicProvider(Provider):
         """Ошибки SDK -> короткий AIError (от частных к общим: 401 → 400 → 429 → прочие → сеть)."""
         if isinstance(e, anthropic.AuthenticationError):
             log.error("Claude: неверный ANTHROPIC_API_KEY")
-            return AIError("неверный ключ", status=e.status_code)
+            return AIError("неверный ключ")
         if isinstance(e, anthropic.BadRequestError):
             log.error("Claude %s: некорректный запрос: %s", model, e.message)
-            return AIError("некорректный запрос", status=e.status_code)
+            return AIError("некорректный запрос")
         if isinstance(e, anthropic.RateLimitError):
             log.warning("Claude %s: rate limit", model)
-            return AIError("лимит запросов", status=e.status_code)
+            return AIError("лимит запросов")
         if isinstance(e, anthropic.APIStatusError):
             log.warning("Claude %s: ошибка API %s: %s", model, e.status_code, e.message)
-            return AIError(f"ошибка API {e.status_code}", status=e.status_code)
+            return AIError(f"ошибка API {e.status_code}")
         log.warning("Claude %s: нет соединения: %r", model, e)
         return AIError("нет соединения")
 
@@ -284,14 +282,8 @@ class OpenAICompatProvider(Provider):
         except (aiohttp.ClientError, TimeoutError) as e:
             log.warning("%s %s: нет соединения: %r", self.name, model, e)
             raise AIError("нет соединения") from e
-        except ValueError as e:
-            raise AIError("неожиданный формат ответа") from e
         try:
-            choice = data["choices"][0]
-            message = choice["message"]
-            if choice.get("finish_reason") == "content_filter" or message.get("refusal"):
-                raise Refused("модель отказалась")
-            content = message.get("content")
+            content = data["choices"][0]["message"].get("content")
         except (KeyError, IndexError, TypeError, AttributeError) as e:
             raise AIError("неожиданный формат ответа") from e
         if isinstance(content, list):  # некоторые API отдают список частей
@@ -343,13 +335,7 @@ class _SSE:
             return None
         try:
             obj = json.loads(data)
-            if isinstance(obj, dict) and obj.get("error"):
-                raise AIError("ошибка в потоке ответа")
-            choice = obj["choices"][0]
-            delta = choice.get("delta") or {}
-            if choice.get("finish_reason") == "content_filter" or delta.get("refusal"):
-                raise Refused("модель отказалась")
-            return delta.get("content") or None
+            return (obj["choices"][0].get("delta") or {}).get("content") or None
         except (json.JSONDecodeError, KeyError, IndexError, TypeError, AttributeError):
             return None
 

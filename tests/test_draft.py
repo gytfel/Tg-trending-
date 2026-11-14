@@ -116,43 +116,29 @@ def make_live(card_style=True):
     return live, log, bot, clock
 
 
-async def test_live_card_is_sent_above_final_text_after_stream_finishes():
+async def test_live_text_in_draft_then_card_with_caption():
     live, log, bot, clock = make_live()
     await live.begin(CARD, "🐝 Рой: 🟢 2\n\n", "")
-    assert log == []
+    assert live.mode == "draft" and live.draft_card
+    assert log == []  # картинка — только когда текст дописан
     clock.t += 1
     await live.update("BTC <b>держится</b>")
     clock.t += 0.1
     await live.update("BTC <b>держится</b> у")  # чаще interval — ждём
     clock.t += 1
     await live.update("BTC <b>держится</b> у $100K")
-    texts = [call["text"] for call in bot.calls]
+    texts = [c["text"] for c in bot.calls]
     assert texts == ["🐝 Рой: 🟢 2\n\nBTC <b>держится</b>", "🐝 Рой: 🟢 2\n\nBTC <b>держится</b> у $100K"]
-    assert log == []
     sent = await live.finish("🐝 Рой: 🟢 2\n\nBTC <b>держится</b> у $100K.", "весь отчёт", "KB")
-    assert [event for event in log if event[0] != "delete"] == [
-        ("new", "✍️", None),
-        ("photo", None, None),
-        ("new", "🐝 Рой: 🟢 2\n\nBTC <b>держится</b> у $100K.", "KB"),
-    ]
-    assert ("delete", "new", None) in log
-    assert sent.name == "new"
+    assert log == [("photo", "🐝 Рой: 🟢 2\n\nBTC <b>держится</b> у $100K.", "KB")] and sent.name == "photo"
 
 
 async def test_live_long_text_goes_under_the_card():
-    live, log, bot, clock = make_live()
+    live, log, _, _ = make_live()
     await live.begin(CARD)
-    clock.t += 1
-    body = "слово " * 400
-    await live.update(body)
-    assert bot.calls[-1]["text"] == body and log == []
-    sent = await live.finish(body, "отчёт", "KB")
-    assert [event for event in log if event[0] != "delete"] == [
-        ("new", "✍️", None),
-        ("photo", None, None),
-        ("new", body, "KB"),
-    ]
-    assert sent.name == "new"
+    await live.finish("слово " * 400, "отчёт", "KB")  # длиннее подписи
+    assert log[0] == ("photo", "👇 Ответ — ниже", None)  # картинка сверху
+    assert log[-1][0] == "new" and log[-1][2] == "KB"  # текст следом, кнопки на нём
 
 
 async def test_live_broken_card_sends_text(monkeypatch):
@@ -163,13 +149,13 @@ async def test_live_broken_card_sends_text(monkeypatch):
     live, log, _, _ = make_live()
     await live.begin(CARD)
     await live.finish("Короткий вывод.", "отчёт", "KB")
-    assert live.mode == "draft" and log == [("new", "отчёт", "KB")]
+    assert log == [("new", "Короткий вывод.", "KB")]
 
 
 async def test_live_text_report_in_draft():
     live, log, bot, clock = make_live(card_style=False)
     await live.begin(CARD, "", "✱ <b>Bitcoin</b>\n\n🤖 <b>Вывод</b>\n")
-    assert live.mode == "draft" and log == []
+    assert live.mode == "draft" and not live.draft_card and log == []
     clock.t += 1
     await live.update("Рынок спокоен")
     assert bot.calls[-1]["text"] == "✱ <b>Bitcoin</b>\n\n🤖 <b>Вывод</b>\nРынок спокоен"
