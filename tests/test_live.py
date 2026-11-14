@@ -81,7 +81,7 @@ def make(card_style=True, interval=0.8):
 CARD = AssetCard("Bitcoin", "BTC", price="$100 000", series=[1.0, 2.0, 3.0])
 
 
-async def test_card_replaces_thinking_message_after_stream():
+async def test_photo_and_final_text_follow_stream():
     live, log, thinking, clock = make()
     await live.begin(CARD, "🐝 Рой из 3 агентов: 🟢 2 · 🔴 1\n\n", "")
     assert thinking.closed
@@ -93,8 +93,11 @@ async def test_card_replaces_thinking_message_after_stream():
     assert preview.startswith("🐝 Рой") and preview.endswith("▍")
     assert_tg_html(preview)
     sent = await live.finish("🐝 Рой…\n\nBTC <b>держится</b> у $100K.", "весь отчёт", "KB")
-    assert ("media", "🐝 Рой…\n\nBTC <b>держится</b> у $100K.", "KB") in log
-    assert ("delete", "new", None) in log and sent is thinking.message
+    photo = ("photo", None, None)
+    final = ("new", "🐝 Рой…\n\nBTC <b>держится</b> у $100K.", "KB")
+    assert log.index(photo) < log.index(final)
+    assert ("delete", "thinking", None) in log and sent is not thinking.message
+    assert not any(e[0] in {"caption", "media"} for e in log)
 
 
 async def test_long_answer_stays_below_card_when_stream_finishes():
@@ -105,8 +108,8 @@ async def test_long_answer_stays_below_card_when_stream_finishes():
     assert not any(e[0] in {"photo", "media"} for e in log)
     assert log[-1][0] == "text" and log[-1][1].endswith("▍")
     sent = await live.finish("слово " * 400, "отчёт", "KB")
-    assert ("media", "👇 Ответ — ниже", None) in log and sent is not thinking.message
-    assert sent.name == "new" and log[-1] == ("text", "слово " * 400, "KB")
+    assert log.index(("photo", None, None)) < log.index(("new", "слово " * 400, "KB"))
+    assert ("delete", "thinking", None) in log and sent is not thinking.message
 
 
 def paragraphs(n: int) -> str:
@@ -167,8 +170,7 @@ async def test_broken_card_falls_back_to_text(monkeypatch):
     await live.begin(CARD)
     await live.finish("подпись", "полный отчёт", "KB")
     assert not any(e[0] in {"photo", "media"} for e in log)
-    assert ("text", "полный отчёт", "KB") in log
-    assert log[-1] == ("delete", "new", None)
+    assert log[-1] == ("text", "полный отчёт", "KB")
 
 
 async def test_flood_control_pauses_updates():

@@ -116,7 +116,7 @@ def make_live(card_style=True):
     return live, log, bot, clock
 
 
-async def test_live_card_replaces_draft_only_after_stream_finishes():
+async def test_live_card_is_sent_above_final_text_after_stream_finishes():
     live, log, bot, clock = make_live()
     await live.begin(CARD, "🐝 Рой: 🟢 2\n\n", "")
     assert log == []
@@ -130,7 +130,12 @@ async def test_live_card_replaces_draft_only_after_stream_finishes():
     assert texts == ["🐝 Рой: 🟢 2\n\nBTC <b>держится</b>", "🐝 Рой: 🟢 2\n\nBTC <b>держится</b> у $100K"]
     assert log == []
     sent = await live.finish("🐝 Рой: 🟢 2\n\nBTC <b>держится</b> у $100K.", "весь отчёт", "KB")
-    assert log == [("new", "✍️", None), ("media", "🐝 Рой: 🟢 2\n\nBTC <b>держится</b> у $100K.", "KB")]
+    assert [event for event in log if event[0] != "delete"] == [
+        ("new", "✍️", None),
+        ("photo", None, None),
+        ("new", "🐝 Рой: 🟢 2\n\nBTC <b>держится</b> у $100K.", "KB"),
+    ]
+    assert ("delete", "new", None) in log
     assert sent.name == "new"
 
 
@@ -142,7 +147,11 @@ async def test_live_long_text_goes_under_the_card():
     await live.update(body)
     assert bot.calls[-1]["text"] == body and log == []
     sent = await live.finish(body, "отчёт", "KB")
-    assert log == [("new", "✍️", None), ("media", "👇 Ответ — ниже", None), ("new", body, "KB")]
+    assert [event for event in log if event[0] != "delete"] == [
+        ("new", "✍️", None),
+        ("photo", None, None),
+        ("new", body, "KB"),
+    ]
     assert sent.name == "new"
 
 

@@ -1,15 +1,14 @@
 """Ответ ИИ прямо по мере генерации — как в ИИ-чатах.
 
 В личке текст растёт в черновике Telegram (sendMessageDraft). По окончании
-генерации обычное сообщение завершает черновик, а карточка занимает место
-этого сообщения. Без черновика для карточки используется сообщение «Думаю…».
+генерации бот завершает черновик и отправляет карточку без подписи, затем
+публикует готовый текст под ней.
 
 Без черновиков (группы, старый сервер) — правки сообщения не чаще раза в
 `interval` секунд, курсор ▍ на конце, финальная правка — с кнопками.
 
 Длина ответа не ограничена: когда текст перерастает сообщение Telegram (4096),
 дописанная часть остаётся в своём сообщении, а печать продолжается в следующем.
-Если ответ длиннее подписи (1024), полный текст остаётся под карточкой.
 """
 
 from __future__ import annotations
@@ -21,19 +20,17 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 
-from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
-from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InputMediaPhoto, Message
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramRetryAfter
+from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, Message
 
 from bot.formatting import split_message
 from bot.handlers.draft import Draft, DraftUnavailable
 from bot.handlers.streaming import CURSOR
 from bot.render import Brand, Card, render
-from bot.services.prose import CAPTION_LIMIT, visible_len
 
 log = logging.getLogger(__name__)
 
 TEXT_SHOW = 3900  # и в сообщении — до лимита 4096; длиннее — продолжение в следующем сообщении
-BELOW = "👇 Ответ — ниже"  # подпись под картинкой, когда ответ не влез в неё
 _TAG = re.compile(r"<[^>]+>")
 
 
@@ -86,11 +83,7 @@ class LiveAnswer:
             return
         self.mode = "text"
         self.message = self.thinking.message
-        if self.card is not None:
-            if self.message is None:
-                self.message = await (self.chat.reply("✍️") if self.reply else self.chat.answer("✍️"))
-            self.msgs = [await self.chat.answer("✍️")]
-        elif self.message is not None:
+        if self.message is not None:
             self.msgs = [self.message]
 
     # -- текст по мере генерации ---------------------------------------------------------------
@@ -146,33 +139,35 @@ class LiveAnswer:
 
     # -- финал ------------------------------------------------------------------------------------
 
-    async def finish(self, caption: str, text: str, kb: InlineKeyboardMarkup | None) -> Message:
-        """Полный ответ с кнопками. caption — подпись под карточкой, text — текстовый ответ."""
+    async def finish(self, summary: str, text: str, kb: InlineKeyboardMarkup | None) -> Message:
+        """Сводка для карточки или полный текстовый отчёт с кнопками."""
+        if self.card is not None and self.mode == "draft" and self.clock() >= self._cooldown:
+            await self._flush()  # показываем последний кусок, даже если не истёк интервал обновления
         async with self._lock:
             if self.card is not None:
-                return await self._finish_card(caption, text, kb)
+                return await self._finish_card(summary, text, kb)
             if self.mode == "draft":  # обычное сообщение — черновик исчезнет сам
                 return await self._send_parts(text, kb)
             return await self._finish_parts(text, kb)
 
-    async def _finish_card(self, caption: str, text: str, kb: InlineKeyboardMarkup | None) -> Message:
+    async def _finish_card(self, summary: str, text: str, kb: InlineKeyboardMarkup | None) -> Message:
         try:
             png = await asyncio.to_thread(render, self.card, await self.brand())
-            if self.message is None:
-                # sendMessage завершает черновик. Фото займёт тот же message_id.
-                self.message = await self.chat.answer("✍️")
-            fits = await put_card(self.message, png, caption, kb)
         except Exception:  # noqa: BLE001 — без картинки отправляем текстовый отчёт
-            log.exception("live card failed, sending text only")
-            if self.message is not None:
-                self.msgs.insert(0, self.message)
+            log.exception("live card render failed, sending text only")
             return await self._finish_parts(text, kb)
-        if fits:
-            for preview in self.msgs:
-                with contextlib.suppress(TelegramBadRequest, TelegramRetryAfter):
-                    await preview.delete()
-            return self.message
-        return await self._finish_parts(caption or text, kb)
+        if self.mode == "draft" and self._shown is not None:
+            remaining = self.draft_interval - (self.clock() - self._last)
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+        for preview in self.msgs:
+            await discard_preview(preview)
+        try:
+            await send_report_photo(self.chat, png, reply=self.reply, had_draft=self.mode == "draft")
+        except Exception:  # noqa: BLE001 — сбой отправки фото не должен скрыть готовый отчёт
+            log.exception("live card send failed, sending text only")
+            return await self._send_parts(text, kb)
+        return await self._send_parts(summary or text, kb)
 
     async def _finish_parts(self, text: str, kb: InlineKeyboardMarkup | None) -> Message:
         """Итоговый текст по сообщениям, которые уже печатались; не хватит — новые, лишние — удалить."""
@@ -219,15 +214,17 @@ async def _edit(msg: Message, text: str, kb: InlineKeyboardMarkup | None = None)
     return msg
 
 
-async def put_card(anchor: Message, png: bytes, caption: str, kb: InlineKeyboardMarkup | None) -> bool:
-    """Заменяет текстовое сообщение фотографией. True — ответ уместился в подпись."""
-    if caption and visible_len(caption) <= CAPTION_LIMIT:
-        try:
-            photo = BufferedInputFile(png, filename="trending.png")
-            await anchor.edit_media(media=InputMediaPhoto(media=photo, caption=caption), reply_markup=kb)
-            return True
-        except TelegramBadRequest as e:
-            log.debug("final caption failed: %s", e)
-    photo = BufferedInputFile(png, filename="trending.png")
-    await anchor.edit_media(media=InputMediaPhoto(media=photo, caption=BELOW))
-    return False
+async def discard_preview(message: Message) -> None:
+    with contextlib.suppress(TelegramAPIError):
+        await message.delete()
+
+
+async def send_report_photo(chat: Message, png: bytes, *, reply: bool = False, had_draft: bool = False) -> None:
+    """Закрывает черновик обычным сообщением и отправляет отдельное фото."""
+    marker = await chat.answer("✍️") if had_draft else None
+    try:
+        send = chat.reply_photo if reply else chat.answer_photo
+        await send(BufferedInputFile(png, filename="trending.png"))
+    finally:
+        if marker is not None:
+            await discard_preview(marker)
