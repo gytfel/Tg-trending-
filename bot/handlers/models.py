@@ -21,7 +21,6 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot import keyboards, texts
 from bot.ai import diagnose, models
 from bot.ai.providers import AIError, ModelRef
-from bot.ai.routing import MODE_KEY
 from bot.callbacks import ModelCb, Nav
 from bot.formatting import esc
 from bot.handlers.common import show
@@ -41,12 +40,11 @@ def current(svc: Services) -> str:
 async def render(svc: Services, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     choices, errors = await models.choices(svc.http, svc.hub)
     svc.model_choices[user_id] = choices
-    state = "✅ настроен" if svc.llm.enabled else "⚪ выключен"
+    state = "✅ работает" if svc.llm.enabled else "⚪ выключен"
     saved = await svc.db.get_kv(KV_KEY)
     lines = [
         "🤖 <b>Модель ИИ</b>",
-        f"Режим: <b>{'автовыбор по задаче' if svc.llm.auto else 'ручной'}</b> — {state}",
-        f"{'Запасная модель' if svc.llm.auto else 'Модель'}: <code>{esc(current(svc))}</code>"
+        f"Сейчас: <code>{esc(current(svc))}</code> — {state}"
         + (" · выбрана здесь" if saved else " · из .env (LLM_MODEL)"),
     ]
     if not svc.llm.enabled and svc.hub is not None:
@@ -61,15 +59,13 @@ async def render(svc: Services, user_id: int) -> tuple[str, InlineKeyboardMarkup
         lines.append(f"⚠️ {esc(diagnose.TITLES.get(provider, provider))}: список не получен — {esc(err)}")
     b = InlineKeyboardBuilder()
     for i, c in enumerate(choices):
-        mark = "✅ " if not svc.llm.auto and c.spec == current(svc) else ""
+        mark = "✅ " if c.spec == current(svc) else ""
         b.button(text=f"{mark}{c.label}"[:60], callback_data=ModelCb(action="use", i=i))
-    if svc.llm.routing is not None and not svc.llm.auto:
-        b.button(text="⚡ Автовыбор", callback_data=ModelCb(action="auto"))
-    if saved or svc.llm.auto:
+    if saved:
         b.button(text="↩️ Как в .env", callback_data=ModelCb(action="env"))
     b.button(text="🔄 Обновить", callback_data=ModelCb(action="list"))
     b.button(text=keyboards.BACK, callback_data=Nav(to="help"))
-    b.adjust(*([1] * len(choices)), 2)
+    b.adjust(*([1] * len(choices)), 2 if not saved else 3)
     return "\n".join(lines), b.as_markup()
 
 
@@ -111,15 +107,8 @@ async def model_button(cb: CallbackQuery, callback_data: ModelCb, svc: Services)
         await cb.answer(texts.ADMIN_ONLY, show_alert=True)
         return
     user_id = cb.from_user.id
-    if callback_data.action == "auto" and svc.llm.routing is not None:
-        await svc.db.set_kv(MODE_KEY, "auto")
-        svc.llm.routing.active = True
-        await cb.answer("Автовыбор моделей включён", show_alert=True)
-    elif callback_data.action == "env":
-        await svc.db.set_kv(MODE_KEY, "manual")
+    if callback_data.action == "env":
         await svc.db.set_kv(KV_KEY, None)
-        if svc.llm.routing is not None:
-            svc.llm.routing.active = False
         svc.llm.set_model(svc.settings.llm_model)
         await cb.answer(f"Вернул модель из .env: {svc.settings.llm_model}", show_alert=True)
     elif callback_data.action == "use":
@@ -131,11 +120,8 @@ async def model_button(cb: CallbackQuery, callback_data: ModelCb, svc: Services)
             await cb.answer(f"Проверяю {choice.model}…")
             ok, note = await try_model(svc, choice.spec)
             if ok:
-                await svc.db.set_kv(KV_KEY, choice.spec)
-                await svc.db.set_kv(MODE_KEY, "manual")
-                if svc.llm.routing is not None:
-                    svc.llm.routing.active = False
                 svc.llm.set_model(choice.spec)
+                await svc.db.set_kv(KV_KEY, choice.spec)
                 if isinstance(cb.message, Message):
                     await cb.message.answer(
                         f"✅ ИИ включён: <code>{esc(choice.spec)}</code> — ответила за {esc(note)}.\n"

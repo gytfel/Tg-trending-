@@ -131,8 +131,7 @@ async def _answer(message: Message, bot: Bot, svc: Services, file, media: str, c
 
     kb = keyboards.back()
     if not text:
-        model = "автовыбор моделей" if svc.llm.auto else svc.llm.vision_ref.short
-        msg = texts.chart_failed(model, error or "пустой ответ")
+        msg = texts.chart_failed(svc.llm.vision_ref.short, error or "пустой ответ")
         if live is not None and live.started:
             await live.finish(msg, msg, kb)
         elif thinking.message is not None:

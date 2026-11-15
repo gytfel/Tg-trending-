@@ -21,7 +21,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from bot.ai import AIError, AIHub, ModelRef
-from bot.ai.routing import ModelRouter
 from bot.formatting import esc
 from bot.query_parser import ParsedQuery, extract_skills
 from bot.services.report import snapshot_context
@@ -248,10 +247,8 @@ class Swarm:
         bot_name: str = "Trending",
         enabled: bool = True,
         mode: str = "always",
-        routing: ModelRouter | None = None,
     ) -> None:
         self.hub = hub
-        self.routing = routing
         self.default = ModelRef.parse(default_model) if default_model else None
         self.role_models = {k: ModelRef.parse(v) for k, v in (role_models or {}).items() if v and v.strip()}
         self.fallback = ModelRef.parse(fallback_model) if fallback_model.strip() else None
@@ -272,8 +269,7 @@ class Swarm:
 
     @property
     def enabled(self) -> bool:
-        auto = self.routing is not None and self.routing.enabled
-        return self._enabled and (auto or any(self.model_for(r) for r in ROLES))
+        return self._enabled and any(self.model_for(r) for r in ROLES)
 
     def reason(self, q: ParsedQuery, kind: str, custom_skills: bool = False) -> str | None:
         """Звать ли рой на этот вопрос: причина или None."""
@@ -284,8 +280,6 @@ class Swarm:
         return swarm_reason(q, kind, custom_skills)
 
     def describe(self) -> str:
-        if self.routing is not None and self.routing.enabled:
-            return f"{len(ROLES)} специалистов (автовыбор моделей)"
         models = sorted({self.model_for(r).short for r in ROLES if self.model_for(r)})  # type: ignore[union-attr]
         return f"{len(ROLES)} специалистов ({', '.join(models)})"
 
@@ -332,13 +326,8 @@ class Swarm:
         t0 = time.monotonic()
         primary = self.model_for(role)
         res = AgentResult(role=role, model=primary)
-        if self.routing is not None and self.routing.active:
-            candidates = await self.routing.candidates(
-                "news" if role.key == "news" else "analysis", primary, preferred=self.role_models.get(role.key)
-            )
-        else:
-            candidates = [primary]
-        if self.fallback and self.fallback not in candidates and self.hub.available(self.fallback):
+        candidates = [primary]
+        if self.fallback and self.fallback != primary and self.hub.available(self.fallback):
             candidates.append(self.fallback)
         for ref in candidates:
             if ref is None:
@@ -375,8 +364,7 @@ class Swarm:
         on_done: Callable[[AgentResult], Awaitable[None]] | None = None,
     ) -> list[AgentResult]:
         """Запускает агентов параллельно. on_start/on_done — для «мыслей» в чате."""
-        auto = self.routing is not None and self.routing.enabled
-        jobs = [(r, p) for r in ROLES if (auto or self.model_for(r)) and (p := self.payload(r, snaps, g))]
+        jobs = [(r, p) for r in ROLES if self.model_for(r) and (p := self.payload(r, snaps, g))]
         if not jobs:
             return []
 

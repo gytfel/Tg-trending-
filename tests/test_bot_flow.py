@@ -435,18 +435,16 @@ class PickyHub(AIHub):
 
 
 async def test_models_pick_and_persist(registry, dispatcher):
-    from bot.ai.routing import ModelRouter
     from tests.test_ai_models import model_http
 
     hub = PickyHub()
     session, feed, svc = await make_env(registry, dispatcher, hub=hub, admin_ids=str(UID))
     svc.hub = hub
-    svc.llm.routing = ModelRouter(svc.http, hub, active=True)
     svc.http.routes[:0] = model_http().routes
     try:
         await feed(msg("/models"))
         text = session.last().text
-        assert "автовыбор по задаче" in text and svc.llm.enabled
+        assert "Сейчас: <code>claude-opus-5-5</code> — ⚪ выключен" in text and "нужен ANTHROPIC_API_KEY" in text
         buttons = session.buttons()
         assert buttons[0] == "Gemini · gemini-9.0-flash" and "Groq · llama-9.3-70b-versatile" in buttons
 
@@ -457,13 +455,10 @@ async def test_models_pick_and_persist(registry, dispatcher):
         assert any("✅ ИИ включён: <code>gemini:gemini-9.0-flash</code>" in t for t in session.texts())
         assert svc.llm.enabled and svc.llm.ref.spec == "gemini:gemini-9.0-flash"
         assert await svc.db.get_kv("llm_model") == "gemini:gemini-9.0-flash"  # переживёт перезапуск
-        assert not svc.llm.auto and await svc.db.get_kv("llm_mode") == "manual"
         assert "✅ Gemini · gemini-9.0-flash" in session.buttons() and "↩️ Как в .env" in session.buttons()
 
         await feed(cb(session.button_data("↩️ Как в .env")))
         assert svc.llm.ref.spec == "claude-opus-5-5" and await svc.db.get_kv("llm_model") is None
-        await feed(cb(session.button_data("⚡ Автовыбор")))
-        assert svc.llm.auto and await svc.db.get_kv("llm_mode") == "auto"
     finally:
         await svc.db.close()
 

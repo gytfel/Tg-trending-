@@ -1,6 +1,7 @@
 """Главный аналитик: итоговый вывод по данным (и по выводам роя агентов, если он включён).
 
-В авторежиме модель подбирается по задаче. LLM_MODEL задаёт запасную или ручную модель.
+Модель задаётся в LLM_MODEL («claude-opus-5-5» или «провайдер:модель»).
+Без ключа к этой модели сервис выключен, и бот пишет вывод по простым правилам.
 """
 
 from __future__ import annotations
@@ -12,7 +13,6 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from bot.ai import AIError, AIHub, Image, ModelRef
-from bot.ai.routing import ModelRouter, text_task
 from bot.db import Skill
 from bot.formatting import esc
 
@@ -68,18 +68,8 @@ def _json(data: Any) -> str:
 
 
 class LLM:
-    def __init__(
-        self,
-        hub: AIHub,
-        model: str,
-        effort: str | None,
-        bot_name: str,
-        vision_model: str = "",
-        *,
-        routing: ModelRouter | None = None,
-    ) -> None:
+    def __init__(self, hub: AIHub, model: str, effort: str | None, bot_name: str, vision_model: str = "") -> None:
         self.hub = hub
-        self.routing = routing
         self.ref = ModelRef.parse(model)
         # скриншоты читает отдельная модель, если задана (VISION_MODEL), иначе — главный аналитик
         self._own_vision = bool(vision_model.strip())
@@ -98,20 +88,11 @@ class LLM:
         return self.ref.model
 
     @property
-    def auto(self) -> bool:
-        return self.routing is not None and self.routing.active
-
-    @property
     def enabled(self) -> bool:
-        return self.hub.available(self.ref) or (self.routing is not None and self.routing.enabled)
+        return self.hub.available(self.ref)
 
     @property
     def vision_enabled(self) -> bool:
-        if self.routing is not None and self.routing.active:
-            if self.routing.vision_enabled:
-                return True
-            if not self._own_vision and self.vision_ref.provider not in ("ollama", "custom"):
-                return False
         return self.hub.available(self.vision_ref)
 
     async def chart(self, image: Image, question: str, facts: str = "", on_text: OnText | None = None) -> str | None:
@@ -124,51 +105,17 @@ class LLM:
         if facts:
             parts.append(f"Свежие данные бота по монете (цифры бирж сейчас):\n{facts}")
         prompt = "\n\n".join(parts)
-        refs = [self.vision_ref]
-        if self.routing is not None and self.routing.active:
-            refs = await self.routing.candidates(
-                "vision", self.vision_ref, preferred=self.vision_ref if self._own_vision else None
-            )
-        return await self._generate(refs, system, prompt, 4000, on_text, image=image)
-
-    async def _generate(
-        self,
-        refs: list[ModelRef],
-        system: str,
-        prompt: str,
-        max_tokens: int,
-        on_text: OnText | None,
-        *,
-        image: Image | None = None,
-    ) -> str | None:
-        last_error = None
-        for ref in refs:
-            text = ""
-            try:
-                if image is None and on_text is None:
-                    text = await self.hub.complete(ref, system, prompt, max_tokens=max_tokens, effort=self.effort)
-                else:
-                    kwargs = {"images": [image]} if image is not None else {}
-                    async for piece in self.hub.stream(
-                        ref, system, prompt, max_tokens=max_tokens, effort=self.effort, **kwargs
-                    ):
-                        text += piece
-                        if on_text is not None:
-                            try:
-                                await on_text(text)
-                            except Exception:  # noqa: BLE001 — показ в Telegram не обрывает генерацию
-                                log.debug("on_text failed", exc_info=True)
-                if text.strip():
-                    log.info("ответ ИИ: %s", ref.spec)
-                    return text.strip()
-            except AIError as error:
-                last_error = error
-                log.warning("модель %s не ответила: %s", ref.spec, error)
-                if text and on_text is not None:  # часть ответа уже показана пользователю
-                    raise
-        if last_error is not None:
-            raise last_error
-        return None
+        text = ""
+        async for piece in self.hub.stream(
+            self.vision_ref, system, prompt, max_tokens=4000, effort=self.effort, images=[image]
+        ):
+            text += piece
+            if on_text is not None:
+                try:
+                    await on_text(text)
+                except Exception:  # noqa: BLE001 — показ в Telegram не должен обрывать ответ модели
+                    log.debug("on_text failed", exc_info=True)
+        return text.strip() or None
 
     @staticmethod
     def build_prompt(
@@ -199,12 +146,17 @@ class LLM:
             return None
         system = SYSTEM_PROMPT.format(bot_name=self.bot_name) + (SWARM_ADDON if agents else "")
         prompt = self.build_prompt(question, context, skills, agents)
-        refs = [self.ref]
-        if self.routing is not None and self.routing.active:
-            task = text_task(question, context, synthesis=bool(agents), skills=bool(skills))
-            refs = await self.routing.candidates(task, self.ref)
-            log.info("автовыбор ИИ (%s): %s", task, ", ".join(ref.spec for ref in refs))
         try:
-            return await self._generate(refs, system, prompt, 16000, on_text)
-        except AIError:
+            if on_text is None:
+                return await self.hub.complete(self.ref, system, prompt, max_tokens=16000, effort=self.effort)
+            text = ""
+            async for piece in self.hub.stream(self.ref, system, prompt, max_tokens=16000, effort=self.effort):
+                text += piece
+                try:
+                    await on_text(text)
+                except Exception:  # noqa: BLE001 — показ в Telegram не должен обрывать ответ модели
+                    log.debug("on_text failed", exc_info=True)
+            return text.strip() or None
+        except AIError as e:
+            log.warning("главный аналитик (%s) не ответил: %s", self.ref, e)
             return None

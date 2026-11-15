@@ -477,7 +477,6 @@ class Analyzer:
             [(s.asset.symbol, s.asset.contract) for s in snaps if s.asset],
             [(s.name, s.content) for s in skills],
             use_swarm,
-            getattr(self.llm, "auto", False),
             str(getattr(self.llm, "ref", "")),  # другая модель — другой ответ
         ]
         return hashlib.sha256(json.dumps(raw, ensure_ascii=False, default=str).encode()).hexdigest()

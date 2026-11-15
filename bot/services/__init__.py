@@ -49,8 +49,6 @@ class Services:
 
     def ai_status(self) -> str:
         lead = self.llm.ref.short if self.llm.enabled else None
-        if lead and self.llm.auto:
-            lead = "автовыбор по задаче"
         if self.swarm is not None and self.swarm.enabled:
             when = "на сложные вопросы" if self.swarm.mode == "auto" else "на каждый вопрос"
             head = f"рой агентов {when}: {self.swarm.describe()}"
