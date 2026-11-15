@@ -15,6 +15,7 @@ from aiogram.types import BotCommand, BotCommandScopeChat
 from dotenv import load_dotenv
 
 from bot.ai import AIHub, diagnose
+from bot.ai.routing import MODE_KEY, ModelRouter
 from bot.config import Settings
 from bot.db import Database
 from bot.handlers import build_router
@@ -67,7 +68,9 @@ async def build_services(settings: Settings) -> Services:
     hub = build_hub(settings)
     # модель, выбранная админом в /models, важнее LLM_MODEL из .env
     model = await db.get_kv("llm_model") or settings.llm_model
-    llm = LLM(hub, model, settings.llm_effort, settings.bot_name, settings.vision_model)
+    mode = await db.get_kv(MODE_KEY)
+    routing = ModelRouter(http, hub, active=settings.auto_model_selection if mode is None else mode == "auto")
+    llm = LLM(hub, model, settings.llm_effort, settings.bot_name, settings.vision_model, routing=routing)
     swarm = Swarm(
         hub,
         default_model=settings.swarm_agent_model,
@@ -76,6 +79,7 @@ async def build_services(settings: Settings) -> Services:
         effort=settings.swarm_agent_effort,
         timeout=settings.swarm_agent_timeout,
         bot_name=settings.bot_name,
+        routing=routing,
         mode=settings.ai_mode,  # auto — рой на сложные вопросы, always — всегда, single — без роя
     )
     health = Health(

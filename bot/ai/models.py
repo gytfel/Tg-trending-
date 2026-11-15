@@ -67,11 +67,14 @@ class Choice:
 def _rank(model: str) -> tuple:
     low = model.lower()
     score = sum(w for word, w in _PREFER if word in low) - sum(w for word, w in _WORSE if word in low)
-    version = tuple(-float(x) for x in _NUM.findall(low)[:2])  # новее — выше
-    return (-score, version, low)
+    return (-score, *version_order(low))
 
 
-async def list_models(http: Http, hub: AIHub, provider: str) -> list[str]:
+def version_order(model: str) -> tuple:
+    return tuple(-float(x) for x in _NUM.findall(model)[:2]), model
+
+
+async def list_models(http: Http, hub: AIHub, provider: str, *, vision: bool = False) -> list[str]:
     """Названия моделей, которые провайдер отдаёт по ключу; бросает HttpError, если не ответил."""
     if provider == "anthropic":
         d = await http.get_json(
@@ -100,6 +103,8 @@ async def list_models(http: Http, hub: AIHub, provider: str) -> list[str]:
     rows = _rows(d)
     if provider == "openrouter":  # только бесплатные и только те, что отвечают текстом
         rows = [r for r in rows if (str(r.get("id", "")).endswith(":free") or _free(r)) and _text_out(r)]
+        if vision:
+            rows = [r for r in rows if _image_in(r)]
     return [str(r["id"]).removeprefix("models/") for r in rows if r.get("id") and r.get("active", True) is not False]
 
 
@@ -118,13 +123,25 @@ def _text_out(row: dict) -> bool:
     return modality.split("->")[-1].strip() == "text"
 
 
+def _image_in(row: dict) -> bool:
+    arch = row.get("architecture") or {}
+    modalities = arch.get("input_modalities")
+    if isinstance(modalities, list):
+        return "image" in modalities
+    return "image" in str(arch.get("modality", "")).split("->", 1)[0].split("+")
+
+
 def _free(row: dict) -> bool:
     p = row.get("pricing") or {}
     return str(p.get("prompt")) in ("0", "0.0") and str(p.get("completion")) in ("0", "0.0")
 
 
+def text_models(models: list[str]) -> set[str]:
+    return {m for m in models if not _SKIP.search(m)}
+
+
 def suggest(provider: str, models: list[str], limit: int = PER_PROVIDER) -> list[Choice]:
-    usable = sorted({m for m in models if not _SKIP.search(m)}, key=_rank)
+    usable = sorted(text_models(models), key=_rank)
     return [Choice(provider, m) for m in usable[:limit]]
 
 
