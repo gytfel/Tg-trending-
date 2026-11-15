@@ -13,6 +13,7 @@ from tests.conftest import FakeHttp
 from tests.test_newswatch import Bot, rss
 
 NOW = datetime.now(UTC)
+RECENT = NOW.replace(microsecond=0) - timedelta(minutes=10)
 MS = int((NOW - timedelta(minutes=5)).timestamp() * 1000)
 XYZ = Asset(symbol="XYZ", name="Xyzcoin")
 
@@ -120,26 +121,26 @@ async def test_exchange_down_is_isolated():
 # --- Telegram ----------------------------------------------------------------------------------------
 
 TG_PAGE = (
-    """
+    f"""
 <div class="tgme_channel_info">Канал</div>
 <div class="tgme_widget_message_wrap js-widget_message_wrap">
  <div class="tgme_widget_message text_not_supported_wrap js-widget_message" data-post="forklog/100" data-view="x">
   <div class="tgme_widget_message_text js-message_text" dir="auto"><b>Binance листит XYZ</b> &amp; запускает пул<br/>Подробности по ссылке</div>
-  <a class="tgme_widget_message_date" href="https://t.me/forklog/100"><time datetime="2026-11-10T10:00:00+00:00" class="time">10:00</time></a>
+  <a class="tgme_widget_message_date" href="https://t.me/forklog/100"><time datetime="{RECENT.isoformat()}" class="time">10:00</time></a>
  </div>
 </div>
 <div class="tgme_widget_message_wrap js-widget_message_wrap">
  <div class="tgme_widget_message js-widget_message" data-post="forklog/101">
   <a class="tgme_widget_message_photo_wrap" href="https://t.me/forklog/101"></a>
-  <a class="tgme_widget_message_date"><time datetime="2026-11-10T10:05:00+00:00">10:05</time></a>
+  <a class="tgme_widget_message_date"><time datetime="{(RECENT + timedelta(minutes=1)).isoformat()}">10:05</time></a>
  </div>
 </div>
 <div class="tgme_widget_message_wrap js-widget_message_wrap">
  <div class="tgme_widget_message js-widget_message" data-post="forklog/102">
   <div class="tgme_widget_message_text js-message_text" dir="auto">🔥<br/>"""
     + "Очень длинная новость " * 20
-    + """</div>
-  <a class="tgme_widget_message_date"><time datetime="2026-11-10T10:10:00+00:00">10:10</time></a>
+    + f"""</div>
+  <a class="tgme_widget_message_date"><time datetime="{(RECENT + timedelta(minutes=2)).isoformat()}">10:10</time></a>
  </div>
 </div>
 """
@@ -151,7 +152,7 @@ def test_parse_channel():
     assert [n.url for n in items] == ["https://t.me/forklog/102", "https://t.me/forklog/100"]  # свежие первыми
     long, first = items
     assert first.title == "Binance листит XYZ & запускает пул"  # теги сняты, &amp; раскодирован, первая строка
-    assert first.source == "TG @forklog" and first.published == datetime(2026, 11, 10, 10, 0, tzinfo=UTC)
+    assert first.source == "TG @forklog" and first.published == RECENT
     assert long.title.startswith("Очень длинная новость") and long.title.endswith("…")  # «🔥» — не заголовок
     assert len(long.title) <= ann.TITLE_MAX
 
@@ -179,7 +180,7 @@ async def test_newsdata(registry):
         {
             "status": "success",
             "results": [
-                {"title": "XYZ jumps 20%", "link": "https://nd/1", "pubDate": "2026-11-10 09:00:00",
+                {"title": "XYZ jumps 20%", "link": "https://nd/1", "pubDate": RECENT.strftime("%Y-%m-%d %H:%M:%S"),
                  "source_name": "CoinDesk"},
                 {"title": "", "link": "https://nd/2"},
             ],
@@ -187,7 +188,7 @@ async def test_newsdata(registry):
     )  # fmt: skip
     items = await registry.get("newsdata").fetcher(Ctx(http=http, asset=XYZ, key="K"))
     assert [(n.title, n.source) for n in items] == [("XYZ jumps 20%", "CoinDesk")]
-    assert items[0].published == datetime(2026, 11, 10, 9, 0, tzinfo=UTC)
+    assert items[0].published == RECENT
     _, _, params = http.calls[0]
     assert params["apikey"] == "K" and params["coin"] == "xyz"
 
@@ -208,11 +209,11 @@ async def test_finnhub(registry):
 async def test_gnews(registry):
     http = FakeHttp().add(
         "gnews.io/api/v4/search",
-        {"articles": [{"title": "Xyzcoin rally", "url": "https://gn/1", "publishedAt": "2026-11-10T08:00:00Z",
+        {"articles": [{"title": "Xyzcoin rally", "url": "https://gn/1", "publishedAt": RECENT.strftime("%Y-%m-%dT%H:%M:%SZ"),
                        "source": {"name": "Forbes"}}]},
     )  # fmt: skip
     (n,) = await registry.get("gnews").fetcher(Ctx(http=http, asset=XYZ, key="K"))
-    assert n.source == "Forbes" and n.published == datetime(2026, 11, 10, 8, 0, tzinfo=UTC)
+    assert n.source == "Forbes" and n.published == RECENT
     assert http.calls[0][2]["q"] == "Xyzcoin crypto"
 
 
@@ -317,7 +318,7 @@ async def test_x_official_api(registry):
         {
             "data": [
                 {"id": "111", "text": "BREAKING: Xyzcoin listed on Coinbase https://t.co/abc", "author_id": "1",
-                 "created_at": "2026-11-10T10:00:00.000Z"},
+                 "created_at": RECENT.isoformat(timespec="milliseconds").replace("+00:00", "Z")},
                 {"id": "112", "text": "Bitcoin ETF flows hit record", "author_id": "2"},
             ],
             "includes": {"users": [{"id": "1", "username": "WatcherGuru"}, {"id": "2", "username": "tier10k"}]},
@@ -327,7 +328,7 @@ async def test_x_official_api(registry):
     assert [(n.title, n.url, n.source) for n in items] == [
         ("BREAKING: Xyzcoin listed on Coinbase", "https://x.com/WatcherGuru/status/111", "X @WatcherGuru")
     ]
-    assert items[0].published == datetime(2026, 11, 10, 10, 0, tzinfo=UTC)
+    assert items[0].published == RECENT
     _, _, params = http.calls[0]
     assert params["max_results"] == 10 and "from:WatcherGuru" in params["query"]
 
@@ -346,11 +347,11 @@ async def test_twitterapi_io(registry):
         {
             "tweets": [
                 {"id": "9", "url": "https://x.com/lookonchain/status/9", "text": "Whale bought 2M $XYZ",
-                 "createdAt": "Tue Nov 10 09:30:00 +0000 2026", "author": {"userName": "lookonchain"}},
+                 "createdAt": RECENT.strftime("%a %b %d %H:%M:%S %z %Y"), "author": {"userName": "lookonchain"}},
             ],
             "has_next_page": False,
         },
     )  # fmt: skip
     (n,) = await registry.get("twitterapi_io").fetcher(Ctx(http=http, asset=XYZ, key="K"))
-    assert n.source == "X @lookonchain" and n.published == datetime(2026, 11, 10, 9, 30, tzinfo=UTC)
+    assert n.source == "X @lookonchain" and n.published == RECENT
     assert "$XYZ" in http.calls[0][2]["query"]
